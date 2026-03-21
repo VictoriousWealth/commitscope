@@ -23,17 +23,18 @@ jobs:
       contents: read
       id-token: write
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       AWS_REGION: ${{ inputs.aws_region }}
       TF_WORKDIR: ${{ inputs.terraform_workdir }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3.1.2
 
       - name: Render terraform.tfvars for dev deploy
         working-directory: ${{ env.TF_WORKDIR }}
