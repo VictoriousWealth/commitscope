@@ -1,0 +1,31 @@
+{
+  "project": "commitscope",
+  "environment": "dev",
+  "aws_region": "eu-west-2",
+  "athena_database": "commitscope_dev",
+  "repo": {
+    "url": "https://github.com/MechanicalSoup/MechanicalSoup.git",
+    "branch": "master",
+    "max_commits": 10,
+    "since": null,
+    "until": null,
+    "from_commit": null,
+    "to_commit": null,
+    "checkout_root": "data/repos"
+  },
+  "storage": {
+    "s3_bucket": "commitscope-nick-dev",
+    "prefixes": {
+      "raw": "raw",
+      "processed": "processed",
+      "curated": "curated"
+    },
+    "write_local_json": true,
+    "write_local_csv": true,
+    "write_local_parquet": true,
+    "write_s3": false
+  },
+  "reporting": {
+    "output_root": "outputs/generated"
+  }
+}
