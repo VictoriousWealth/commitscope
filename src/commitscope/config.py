@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,8 +43,16 @@ class ReportingConfig:
 
 @dataclass(slots=True)
 class RuntimeConfig:
+    execution_mode: str = "local"
     container_image: str = "commitscope:dev"
     container_command: list[str] | None = None
+    state_machine_arn: str | None = None
+
+
+@dataclass(slots=True)
+class QuickSightConfig:
+    dashboard_name: str = "CommitScope Dev Dashboard"
+    dataset_prefix: str = "commitscope_dev"
 
 
 @dataclass(slots=True)
@@ -56,6 +65,7 @@ class AppConfig:
     storage: StorageConfig
     reporting: ReportingConfig
     runtime: RuntimeConfig
+    quicksight: QuickSightConfig
 
     @property
     def output_root(self) -> Path:
@@ -74,6 +84,7 @@ def load_config(path: str | Path) -> AppConfig:
     storage = StorageConfig(prefixes=prefixes, **{k: v for k, v in raw["storage"].items() if k != "prefixes"})
     reporting = ReportingConfig(**raw.get("reporting", {}))
     runtime = RuntimeConfig(**raw.get("runtime", {}))
+    quicksight = QuickSightConfig(**raw.get("quicksight", {}))
     return AppConfig(
         project=raw["project"],
         environment=raw["environment"],
@@ -83,4 +94,29 @@ def load_config(path: str | Path) -> AppConfig:
         storage=storage,
         reporting=reporting,
         runtime=runtime,
+        quicksight=quicksight,
     )
+
+
+def load_config_from_env(default_path: str | Path) -> AppConfig:
+    inline = os.environ.get("COMMITSCOPE_CONFIG_JSON")
+    if inline:
+        raw = json.loads(inline)
+        repo = RepoConfig(**raw["repo"])
+        prefixes = PrefixConfig(**raw["storage"].get("prefixes", {}))
+        storage = StorageConfig(prefixes=prefixes, **{k: v for k, v in raw["storage"].items() if k != "prefixes"})
+        reporting = ReportingConfig(**raw.get("reporting", {}))
+        runtime = RuntimeConfig(**raw.get("runtime", {}))
+        quicksight = QuickSightConfig(**raw.get("quicksight", {}))
+        return AppConfig(
+            project=raw["project"],
+            environment=raw["environment"],
+            aws_region=raw["aws_region"],
+            athena_database=raw["athena_database"],
+            repo=repo,
+            storage=storage,
+            reporting=reporting,
+            runtime=runtime,
+            quicksight=quicksight,
+        )
+    return load_config(default_path)
