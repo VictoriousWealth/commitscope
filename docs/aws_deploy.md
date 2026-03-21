@@ -47,7 +47,6 @@ Set these GitHub repository variables:
 - `TF_SECURITY_GROUP_IDS_JSON`
 - `TF_STATE_BUCKET`
 - `TF_STATE_KEY`
-- `TF_LOCK_TABLE` (optional but recommended)
 
 Example variable values:
 
@@ -59,10 +58,9 @@ TF_SUBNET_IDS_JSON=["subnet-02686afdabd1e9a42","subnet-0158146133e1d6aa0","subne
 TF_SECURITY_GROUP_IDS_JSON=["sg-0c1168281540af705"]
 TF_STATE_BUCKET=commitscope-nick-tfstate
 TF_STATE_KEY=envs/dev/terraform.tfstate
-TF_LOCK_TABLE=commitscope-tf-locks
 ```
 
-The backend bucket and optional lock table must already exist before `deploy-dev.yml` runs. This repo now uses an S3 remote backend, so GitHub runners no longer rely on ephemeral local `terraform.tfstate`.
+The backend bucket must already exist before `deploy-dev.yml` runs. This repo now uses an S3 remote backend with S3 lockfiles, so GitHub runners no longer rely on ephemeral local `terraform.tfstate`.
 
 ## 3. Image Tag Convention
 
