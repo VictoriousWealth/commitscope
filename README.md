@@ -90,6 +90,9 @@ Minimal cloud run sequence:
    - `TF_ECR_REPOSITORY_NAME`
    - `TF_SUBNET_IDS_JSON`
    - `TF_SECURITY_GROUP_IDS_JSON`
+   - `TF_STATE_BUCKET`
+   - `TF_STATE_KEY`
+   - `TF_LOCK_TABLE` (optional but recommended)
 3. trigger [deploy-dev.yml](/Users/efeon/commitscope/.github/workflows/deploy-dev.yml)
 4. generate a Step Functions input payload:
 
