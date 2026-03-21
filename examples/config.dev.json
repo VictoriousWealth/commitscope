@@ -5,7 +5,7 @@
   "athena_database": "commitscope_dev",
   "repo": {
     "url": "https://github.com/MechanicalSoup/MechanicalSoup.git",
-    "branch": "master",
+    "branch": "main",
     "max_commits": 10,
     "since": null,
     "until": null,
