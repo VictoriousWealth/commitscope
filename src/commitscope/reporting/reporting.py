@@ -6,6 +6,7 @@ import pandas as pd
 
 from commitscope.aws.ddl import build_glue_ddl
 from commitscope.config import AppConfig
+from commitscope.reporting.quicksight import write_quicksight_assets
 from commitscope.utils.fs import ensure_dir
 
 
@@ -21,7 +22,8 @@ def write_reporting_artifacts(config: AppConfig, tables: dict[str, list[dict]]) 
     summary_path.write_text(_build_summary(commit_summary, class_metrics), encoding="utf-8")
     sql_path.write_text(_build_athena_sql(config), encoding="utf-8")
     ddl_path.write_text(build_glue_ddl(config), encoding="utf-8")
-    return {"summary": summary_path, "sql": sql_path, "ddl": ddl_path}
+    quicksight_paths = write_quicksight_assets(config, output_root)
+    return {"summary": summary_path, "sql": sql_path, "ddl": ddl_path, **quicksight_paths}
 
 
 def _build_summary(commit_summary: pd.DataFrame, class_metrics: pd.DataFrame) -> str:
