@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from commitscope.aws.ddl import build_glue_ddl
 from commitscope.config import AppConfig
 from commitscope.utils.fs import ensure_dir
 
@@ -12,13 +13,15 @@ def write_reporting_artifacts(config: AppConfig, tables: dict[str, list[dict]]) 
     output_root = ensure_dir(config.output_root / "curated")
     summary_path = output_root / "summary.md"
     sql_path = output_root / "athena_queries.sql"
+    ddl_path = output_root / "glue_ddl.sql"
 
     commit_summary = pd.DataFrame(tables.get("commit_summary", []))
     class_metrics = pd.DataFrame(tables.get("class_metrics", []))
 
     summary_path.write_text(_build_summary(commit_summary, class_metrics), encoding="utf-8")
     sql_path.write_text(_build_athena_sql(config), encoding="utf-8")
-    return {"summary": summary_path, "sql": sql_path}
+    ddl_path.write_text(build_glue_ddl(config), encoding="utf-8")
+    return {"summary": summary_path, "sql": sql_path, "ddl": ddl_path}
 
 
 def _build_summary(commit_summary: pd.DataFrame, class_metrics: pd.DataFrame) -> str:
@@ -59,17 +62,8 @@ def _build_summary(commit_summary: pd.DataFrame, class_metrics: pd.DataFrame) ->
 
 
 def _build_athena_sql(config: AppConfig) -> str:
-    bucket = config.storage.s3_bucket
-    processed = config.storage.prefixes.processed.rstrip("/")
     database = config.athena_database
-    return f"""CREATE DATABASE IF NOT EXISTS {database};
-
-MSCK REPAIR TABLE {database}.class_metrics;
-MSCK REPAIR TABLE {database}.method_metrics;
-MSCK REPAIR TABLE {database}.file_metrics;
-MSCK REPAIR TABLE {database}.commit_summary;
-
-SELECT commit_date, avg(avg_wmc) AS avg_wmc, max(max_cc) AS peak_cc
+    return f"""SELECT commit_date, avg(avg_wmc) AS avg_wmc, max(max_cc) AS peak_cc
 FROM {database}.commit_summary
 GROUP BY commit_date
 ORDER BY commit_date;
@@ -80,6 +74,9 @@ WHERE repo = 'YOUR_REPO'
 ORDER BY wmc DESC, fanin DESC
 LIMIT 20;
 
--- Example S3 layout for the processed datasets:
--- s3://{bucket}/{processed}/class_metrics/repo=<repo>/branch=<branch>/commit_date=<yyyy-mm-dd>/data.parquet
+SELECT language, sum(loc) AS total_loc
+FROM {database}.file_metrics
+WHERE repo = 'YOUR_REPO'
+GROUP BY language
+ORDER BY total_loc DESC;
 """
