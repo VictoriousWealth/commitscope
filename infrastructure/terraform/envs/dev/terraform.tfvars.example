@@ -1,0 +1,9 @@
+project          = "commitscope"
+environment      = "dev"
+aws_region       = "eu-west-2"
+bucket_name      = "commitscope-nick-dev"
+athena_database  = "commitscope_dev"
+container_cluster_arn         = null
+container_task_definition_arn = null
+subnet_ids        = []
+security_group_ids = []
