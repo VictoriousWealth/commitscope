@@ -23,6 +23,16 @@ variable "athena_database" {
   default = "commitscope_dev"
 }
 
+variable "create_ecr_repository" {
+  type    = bool
+  default = true
+}
+
+variable "ecr_repository_name" {
+  type    = string
+  default = "commitscope-dev"
+}
+
 variable "container_image_uri" {
   type    = string
   default = null
