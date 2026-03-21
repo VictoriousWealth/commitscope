@@ -41,6 +41,12 @@ class ReportingConfig:
 
 
 @dataclass(slots=True)
+class RuntimeConfig:
+    container_image: str = "commitscope:dev"
+    container_command: list[str] | None = None
+
+
+@dataclass(slots=True)
 class AppConfig:
     project: str
     environment: str
@@ -49,6 +55,7 @@ class AppConfig:
     repo: RepoConfig
     storage: StorageConfig
     reporting: ReportingConfig
+    runtime: RuntimeConfig
 
     @property
     def output_root(self) -> Path:
@@ -66,6 +73,7 @@ def load_config(path: str | Path) -> AppConfig:
     prefixes = PrefixConfig(**raw["storage"].get("prefixes", {}))
     storage = StorageConfig(prefixes=prefixes, **{k: v for k, v in raw["storage"].items() if k != "prefixes"})
     reporting = ReportingConfig(**raw.get("reporting", {}))
+    runtime = RuntimeConfig(**raw.get("runtime", {}))
     return AppConfig(
         project=raw["project"],
         environment=raw["environment"],
@@ -74,4 +82,5 @@ def load_config(path: str | Path) -> AppConfig:
         repo=repo,
         storage=storage,
         reporting=reporting,
+        runtime=runtime,
     )
