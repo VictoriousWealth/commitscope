@@ -51,7 +51,12 @@ def _build_summary(commit_summary: pd.DataFrame, class_metrics: pd.DataFrame) ->
     )
 
     if not class_metrics.empty:
-        hotspots = class_metrics.sort_values(by=["wmc", "fanin", "cbo"], ascending=False).head(5)
+        hotspots = (
+            class_metrics.groupby("class_name", as_index=False)
+            .agg({"wmc": "max", "fanin": "max", "cbo": "max"})
+            .sort_values(by=["wmc", "fanin", "cbo"], ascending=False)
+            .head(5)
+        )
         lines.append("## Hotspot Classes")
         for _, row in hotspots.iterrows():
             lines.append(
