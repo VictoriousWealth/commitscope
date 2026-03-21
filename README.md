@@ -9,6 +9,8 @@ CommitScope is an AWS-first analytics pipeline that turns Git history into query
 - Local outputs in JSON, CSV, and Parquet
 - S3 outputs under `raw/`, `processed/`, and `curated/`
 - Athena-ready datasets partitioned by `repo`, `branch`, and `commit_date`
+- Config-driven execution for local runs or Step Functions -> ECS Fargate
+- QuickSight dashboard definition artifacts
 - Terraform scaffold for `eu-west-2` dev infrastructure
 - ECS Fargate scaffold for heavy analysis jobs
 - GitHub Actions CI
@@ -26,6 +28,12 @@ Run the pipeline with the example config:
 
 ```bash
 PYTHONPATH=src python -m commitscope.main run --config examples/config.dev.json
+```
+
+Generate the Step Functions payload for cloud execution:
+
+```bash
+PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json
 ```
 
 Build and run the containerized heavy-analysis path locally:
@@ -58,3 +66,11 @@ The metric semantics intentionally follow the notebooks in [docs/metric_contract
 ## Athena DDL
 
 Running the pipeline also emits concrete Glue/Athena DDL into `outputs/generated/curated/glue_ddl.sql`, alongside example Athena queries in `outputs/generated/curated/athena_queries.sql`.
+
+## QuickSight
+
+The reporting layer emits QuickSight-ready dashboard and dataset definitions into:
+
+- `outputs/generated/curated/quicksight_datasets.json`
+- `outputs/generated/curated/quicksight_dashboard.json`
+- `outputs/generated/curated/runtime_manifest.json`
