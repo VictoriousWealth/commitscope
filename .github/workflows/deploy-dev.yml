@@ -43,12 +43,17 @@ jobs:
           TF_ECR_REPOSITORY_NAME: ${{ vars.TF_ECR_REPOSITORY_NAME }}
           TF_SUBNET_IDS_JSON: ${{ vars.TF_SUBNET_IDS_JSON }}
           TF_SECURITY_GROUP_IDS_JSON: ${{ vars.TF_SECURITY_GROUP_IDS_JSON }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+          TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
         run: |
           : "${TF_BUCKET_NAME:=commitscope-nick-dev}"
           : "${TF_ATHENA_DATABASE:=commitscope_dev}"
           : "${TF_ECR_REPOSITORY_NAME:=commitscope-dev}"
           : "${TF_SUBNET_IDS_JSON:?Set GitHub variable TF_SUBNET_IDS_JSON to a JSON array of subnet IDs}"
           : "${TF_SECURITY_GROUP_IDS_JSON:?Set GitHub variable TF_SECURITY_GROUP_IDS_JSON to a JSON array of security group IDs}"
+          : "${TF_STATE_BUCKET:?Set GitHub variable TF_STATE_BUCKET to the S3 bucket that stores Terraform state}"
+          : "${TF_STATE_KEY:=envs/dev/terraform.tfstate}"
           cat > terraform.tfvars.json <<EOF
           {
             "project": "commitscope",
@@ -65,9 +70,20 @@ jobs:
           }
           EOF
 
+          cat > backend.hcl <<EOF
+          bucket         = "${TF_STATE_BUCKET}"
+          key            = "${TF_STATE_KEY}"
+          region         = "${AWS_REGION}"
+          encrypt        = true
+          EOF
+
+          if [ -n "${TF_LOCK_TABLE}" ]; then
+            printf 'dynamodb_table = "%s"\n' "${TF_LOCK_TABLE}" >> backend.hcl
+          fi
+
       - name: Terraform init
         working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform init
+        run: terraform init -reconfigure -backend-config=backend.hcl
 
       - name: Terraform apply base infrastructure
         working-directory: ${{ env.TF_WORKDIR }}
