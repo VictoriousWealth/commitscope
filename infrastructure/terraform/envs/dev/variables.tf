@@ -37,3 +37,8 @@ variable "security_group_ids" {
   type    = list(string)
   default = []
 }
+
+variable "sample_config_path" {
+  type    = string
+  default = "examples/config.dev.json"
+}
