@@ -81,15 +81,23 @@ The exact dev deployment flow is documented in [aws_deploy.md](/Users/efeon/comm
 
 Minimal cloud run sequence:
 
-1. fill in [terraform.tfvars.example](/Users/efeon/commitscope/infrastructure/terraform/envs/dev/terraform.tfvars.example) as `infrastructure/terraform/envs/dev/terraform.tfvars`
-2. trigger [deploy-dev.yml](/Users/efeon/commitscope/.github/workflows/deploy-dev.yml)
-3. generate a Step Functions input payload:
+1. set GitHub repo secrets:
+   - `AWS_GITHUB_ACTIONS_ROLE_ARN`
+   - `AWS_ACCOUNT_ID`
+2. set GitHub repo variables:
+   - `TF_BUCKET_NAME`
+   - `TF_ATHENA_DATABASE`
+   - `TF_ECR_REPOSITORY_NAME`
+   - `TF_SUBNET_IDS_JSON`
+   - `TF_SECURITY_GROUP_IDS_JSON`
+3. trigger [deploy-dev.yml](/Users/efeon/commitscope/.github/workflows/deploy-dev.yml)
+4. generate a Step Functions input payload:
 
 ```bash
 PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
 ```
 
-4. start the state machine:
+5. start the state machine:
 
 ```bash
 aws stepfunctions start-execution \
@@ -98,7 +106,7 @@ aws stepfunctions start-execution \
   --input file://stepfunctions-input.json
 ```
 
-5. verify:
+6. verify:
    - Step Functions execution succeeded
    - Lambda logs exist
    - ECS task reached `STOPPED`
