@@ -1,6 +1,8 @@
 terraform {
   required_version = ">= 1.6.0"
 
+  backend "s3" {}
+
   required_providers {
     archive = {
       source  = "hashicorp/archive"
@@ -16,6 +18,8 @@ terraform {
 provider "aws" {
   region = var.aws_region
 }
+
+data "aws_caller_identity" "current" {}
 
 locals {
   name_prefix = "${var.project}-${var.environment}"
@@ -251,6 +255,19 @@ resource "aws_iam_role_policy" "step_functions_policy" {
         Resource = [
           aws_iam_role.ecs_task_execution_role[0].arn,
           aws_iam_role.ecs_task_role[0].arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "events:PutRule",
+          "events:PutTargets",
+          "events:DescribeRule",
+          "events:DeleteRule",
+          "events:RemoveTargets"
+        ]
+        Resource = [
+          "arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule"
         ]
       }
     ]
