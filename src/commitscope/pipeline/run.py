@@ -6,6 +6,7 @@ from pathlib import Path
 from commitscope.analysis.metrics import analyze_repository_snapshot
 from commitscope.config import AppConfig
 from commitscope.git.repository import clone_or_update_repository, checkout_commit, repo_name_from_url, restore_branch, select_commits
+from commitscope.reporting.manifest import write_runtime_manifest
 from commitscope.reporting.reporting import write_reporting_artifacts
 from commitscope.storage.writers import write_processed_outputs, write_raw_commit_payload
 from commitscope.utils.fs import ensure_dir
@@ -68,4 +69,6 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
 
     processed_paths = write_processed_outputs(config, tables)
     report_paths = write_reporting_artifacts(config, tables)
-    return {**processed_paths, **report_paths}
+    outputs = {**processed_paths, **report_paths}
+    outputs["runtime_manifest"] = write_runtime_manifest(config, outputs)
+    return outputs
