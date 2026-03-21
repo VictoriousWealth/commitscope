@@ -74,3 +74,34 @@ The reporting layer emits QuickSight-ready dashboard and dataset definitions int
 - `outputs/generated/curated/quicksight_datasets.json`
 - `outputs/generated/curated/quicksight_dashboard.json`
 - `outputs/generated/curated/runtime_manifest.json`
+
+## AWS Deployment
+
+The exact dev deployment flow is documented in [aws_deploy.md](/Users/efeon/commitscope/docs/aws_deploy.md).
+
+Minimal cloud run sequence:
+
+1. fill in [terraform.tfvars.example](/Users/efeon/commitscope/infrastructure/terraform/envs/dev/terraform.tfvars.example) as `infrastructure/terraform/envs/dev/terraform.tfvars`
+2. trigger [deploy-dev.yml](/Users/efeon/commitscope/.github/workflows/deploy-dev.yml)
+3. generate a Step Functions input payload:
+
+```bash
+PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
+```
+
+4. start the state machine:
+
+```bash
+aws stepfunctions start-execution \
+  --region eu-west-2 \
+  --state-machine-arn "$(terraform -chdir=infrastructure/terraform/envs/dev output -raw state_machine_arn)" \
+  --input file://stepfunctions-input.json
+```
+
+5. verify:
+   - Step Functions execution succeeded
+   - Lambda logs exist
+   - ECS task reached `STOPPED`
+   - Parquet exists under `s3://commitscope-nick-dev/processed/`
+   - Athena can query `commitscope_dev.commit_summary`
+   - QuickSight can preview the Athena-backed datasets
