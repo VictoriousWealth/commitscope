@@ -29,6 +29,7 @@
     "output_root": "outputs/generated"
   },
   "runtime": {
+    "execution_mode": "local",
     "container_image": "commitscope:dev",
     "container_command": [
       "python",
@@ -37,6 +38,11 @@
       "run",
       "--config",
       "/app/examples/config.dev.json"
-    ]
+    ],
+    "state_machine_arn": null
+  },
+  "quicksight": {
+    "dashboard_name": "CommitScope Dev Dashboard",
+    "dataset_prefix": "commitscope_dev"
   }
 }
