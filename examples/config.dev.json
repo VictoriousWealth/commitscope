@@ -27,5 +27,16 @@
   },
   "reporting": {
     "output_root": "outputs/generated"
+  },
+  "runtime": {
+    "container_image": "commitscope:dev",
+    "container_command": [
+      "python",
+      "-m",
+      "commitscope.main",
+      "run",
+      "--config",
+      "/app/examples/config.dev.json"
+    ]
   }
 }
