@@ -45,7 +45,6 @@ jobs:
           TF_SECURITY_GROUP_IDS_JSON: ${{ vars.TF_SECURITY_GROUP_IDS_JSON }}
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
-          TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
         run: |
           : "${TF_BUCKET_NAME:=commitscope-nick-dev}"
           : "${TF_ATHENA_DATABASE:=commitscope_dev}"
@@ -75,11 +74,8 @@ jobs:
           key            = "${TF_STATE_KEY}"
           region         = "${AWS_REGION}"
           encrypt        = true
+          use_lockfile   = true
           EOF
-
-          if [ -n "${TF_LOCK_TABLE}" ]; then
-            printf 'dynamodb_table = "%s"\n' "${TF_LOCK_TABLE}" >> backend.hcl
-          fi
 
       - name: Terraform init
         working-directory: ${{ env.TF_WORKDIR }}
