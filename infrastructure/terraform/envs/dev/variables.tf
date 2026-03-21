@@ -23,12 +23,7 @@ variable "athena_database" {
   default = "commitscope_dev"
 }
 
-variable "container_cluster_arn" {
-  type    = string
-  default = null
-}
-
-variable "container_task_definition_arn" {
+variable "container_image_uri" {
   type    = string
   default = null
 }
