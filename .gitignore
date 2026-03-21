@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+data/repos/
+outputs/generated/
+outputs/tmp/
+dist/
+build/
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+.terraform.lock.hcl
