@@ -11,9 +11,9 @@ This is the exact dev deployment path for `eu-west-2`.
   - `AWS_GITHUB_ACTIONS_ROLE_ARN`
   - `AWS_ACCOUNT_ID`
 
-## 1. Create `terraform.tfvars`
+## 1. Local Terraform File
 
-Use [terraform.tfvars.example](/Users/efeon/commitscope/infrastructure/terraform/envs/dev/terraform.tfvars.example) as the template. A typical dev file is:
+Use [terraform.tfvars.example](/Users/efeon/commitscope/infrastructure/terraform/envs/dev/terraform.tfvars.example) as the local template if you want to run Terraform from your machine. A typical dev file is:
 
 ```hcl
 project               = "commitscope"
@@ -29,7 +29,34 @@ security_group_ids    = ["sg-0123456789abcdef0"]
 sample_config_path    = "examples/config.dev.json"
 ```
 
-## 2. Image Tag Convention
+This file is not required by the GitHub Actions deployment workflow.
+
+## 2. GitHub Actions Variables And Secrets
+
+Set these GitHub repository secrets:
+
+- `AWS_GITHUB_ACTIONS_ROLE_ARN`
+- `AWS_ACCOUNT_ID`
+
+Set these GitHub repository variables:
+
+- `TF_BUCKET_NAME`
+- `TF_ATHENA_DATABASE`
+- `TF_ECR_REPOSITORY_NAME`
+- `TF_SUBNET_IDS_JSON`
+- `TF_SECURITY_GROUP_IDS_JSON`
+
+Example variable values:
+
+```text
+TF_BUCKET_NAME=commitscope-nick-dev
+TF_ATHENA_DATABASE=commitscope_dev
+TF_ECR_REPOSITORY_NAME=commitscope-dev
+TF_SUBNET_IDS_JSON=["subnet-02686afdabd1e9a42","subnet-0158146133e1d6aa0","subnet-08605bc763c0c8c86"]
+TF_SECURITY_GROUP_IDS_JSON=["sg-0c1168281540af705"]
+```
+
+## 3. Image Tag Convention
 
 The deploy workflow tags the ECS image with the first 12 characters of the Git commit SHA.
 
@@ -41,7 +68,7 @@ Example:
 
 You can override the tag in the workflow dispatch UI, but the default should remain Git-SHA based.
 
-## 3. Deploy
+## 4. Deploy
 
 Trigger [deploy-dev.yml](/Users/efeon/commitscope/.github/workflows/deploy-dev.yml).
 
@@ -52,7 +79,7 @@ What it does:
 3. builds and pushes the container image tagged with the Git SHA
 4. runs `terraform apply` again with `container_image_uri=<ecr-url>:<git-sha>`
 
-## 4. Live Cloud Execution Path
+## 5. Live Cloud Execution Path
 
 The cloud path is:
 
@@ -66,7 +93,7 @@ The cloud path is:
 5. Athena queries the Parquet written under `processed/`
 6. QuickSight uses Athena-backed datasets described in the generated curated artifacts
 
-## 5. Start A Cloud Run
+## 6. Start A Cloud Run
 
 First generate the Step Functions payload:
 
@@ -83,7 +110,7 @@ aws stepfunctions start-execution \
   --input file://stepfunctions-input.json
 ```
 
-## 6. Post-Deploy Verification
+## 7. Post-Deploy Verification
 
 Confirm Step Functions execution succeeded:
 
