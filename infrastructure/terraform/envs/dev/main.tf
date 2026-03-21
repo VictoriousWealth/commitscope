@@ -71,6 +71,12 @@ resource "aws_athena_workgroup" "commitscope" {
   tags = local.common_tags
 }
 
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/${local.name_prefix}"
+  retention_in_days = 14
+  tags              = local.common_tags
+}
+
 resource "aws_iam_role" "lambda_role" {
   name = "${local.name_prefix}-lambda-role"
   assume_role_policy = jsonencode({
@@ -184,12 +190,118 @@ resource "aws_iam_role_policy" "step_functions_policy" {
         Resource = [aws_lambda_function.pipeline.arn]
       },
       {
+        Effect = "Allow"
+        Action = ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks"]
+        Resource = [
+          aws_ecs_task_definition.analysis[0].arn
+        ]
+      },
+      {
         Effect   = "Allow"
-        Action   = ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks", "iam:PassRole"]
+        Action   = ["iam:PassRole"]
         Resource = "*"
       }
     ]
   })
+}
+
+resource "aws_iam_role" "ecs_task_execution_role" {
+  count = var.container_image_uri != null ? 1 : 0
+  name  = "${local.name_prefix}-ecs-execution-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role" {
+  count      = var.container_image_uri != null ? 1 : 0
+  role       = aws_iam_role.ecs_task_execution_role[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "ecs_task_role" {
+  count = var.container_image_uri != null ? 1 : 0
+  name  = "${local.name_prefix}-ecs-task-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "ecs_task_data_lake" {
+  count = var.container_image_uri != null ? 1 : 0
+  name  = "${local.name_prefix}-ecs-task-data-lake"
+  role  = aws_iam_role.ecs_task_role[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
+        Resource = [
+          aws_s3_bucket.data_lake.arn,
+          "${aws_s3_bucket.data_lake.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_ecs_cluster" "analysis" {
+  count = var.container_image_uri != null ? 1 : 0
+  name  = "${local.name_prefix}-cluster"
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+  tags = local.common_tags
+}
+
+resource "aws_ecs_task_definition" "analysis" {
+  count                    = var.container_image_uri != null ? 1 : 0
+  family                   = "${local.name_prefix}-analysis"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "1024"
+  memory                   = "2048"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role[0].arn
+  task_role_arn            = aws_iam_role.ecs_task_role[0].arn
+  container_definitions = jsonencode([
+    {
+      name      = "commitscope"
+      image     = var.container_image_uri
+      essential = true
+      command   = ["python", "-m", "commitscope.aws.container"]
+      environment = [
+        {
+          name  = "COMMITSCOPE_CONFIG"
+          value = "/app/examples/config.dev.json"
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ecs.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "commitscope"
+        }
+      }
+    }
+  ])
+  tags = local.common_tags
 }
 
 data "archive_file" "lambda_zip" {
@@ -224,15 +336,15 @@ resource "aws_sfn_state_machine" "pipeline" {
       Prepare = {
         Type     = "Task"
         Resource = aws_lambda_function.pipeline.arn
-        Next     = var.container_cluster_arn != null && var.container_task_definition_arn != null ? "RunAnalysisContainer" : "Complete"
+        Next     = var.container_image_uri != null ? "RunAnalysisContainer" : "Complete"
       }
       RunAnalysisContainer = {
         Type     = "Task"
         Resource = "arn:aws:states:::ecs:runTask.sync"
         Parameters = {
           LaunchType     = "FARGATE"
-          Cluster        = var.container_cluster_arn
-          TaskDefinition = var.container_task_definition_arn
+          Cluster        = aws_ecs_cluster.analysis[0].arn
+          TaskDefinition = aws_ecs_task_definition.analysis[0].arn
           NetworkConfiguration = {
             AwsvpcConfiguration = {
               AssignPublicIp = "ENABLED"
@@ -249,4 +361,27 @@ resource "aws_sfn_state_machine" "pipeline" {
     }
   })
   tags = local.common_tags
+}
+
+resource "aws_athena_named_query" "core_ddl" {
+  name        = "${local.name_prefix}-core-ddl"
+  database    = aws_glue_catalog_database.commitscope.name
+  workgroup   = aws_athena_workgroup.commitscope.name
+  description = "Core Glue/Athena DDL for CommitScope tables"
+  query       = <<-SQL
+CREATE EXTERNAL TABLE IF NOT EXISTS ${var.athena_database}.commit_summary (
+  total_classes int,
+  total_methods int,
+  avg_wmc double,
+  avg_lcom double,
+  max_cc int,
+  total_loc int,
+  total_files int,
+  python_files int,
+  non_python_files int
+)
+PARTITIONED BY (repo string, branch string, commit_hash string, commit_date string)
+STORED AS PARQUET
+LOCATION 's3://${var.bucket_name}/processed/commit_summary/';
+  SQL
 }
