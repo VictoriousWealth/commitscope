@@ -45,8 +45,15 @@ def write_processed_outputs(config: AppConfig, tables: dict[str, list[dict]]) ->
 
 
 def _write_partitioned_parquet(frame: pd.DataFrame, table_root: Path) -> None:
-    for (repo, branch, commit_date), subset in frame.groupby(["repo", "branch", "commit_date"], dropna=False):
+    for (repo, branch, commit_hash, commit_date), subset in frame.groupby(
+        ["repo", "branch", "commit_hash", "commit_date"], dropna=False
+    ):
         partition_root = ensure_dir(
-            table_root / f"repo={repo}" / f"branch={branch}" / f"commit_date={commit_date}"
+            table_root
+            / f"repo={repo}"
+            / f"branch={branch}"
+            / f"commit_hash={commit_hash}"
+            / f"commit_date={commit_date}"
         )
-        subset.to_parquet(partition_root / "data.parquet", index=False)
+        drop_columns = [column for column in ("repo", "branch", "commit_hash", "commit_date") if column in subset.columns]
+        subset.drop(columns=drop_columns).to_parquet(partition_root / "data.parquet", index=False)
