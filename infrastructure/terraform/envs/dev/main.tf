@@ -19,11 +19,45 @@ provider "aws" {
 
 locals {
   name_prefix = "${var.project}-${var.environment}"
+  effective_container_image_uri = var.container_image_uri != null ? var.container_image_uri : (
+    var.create_ecr_repository ? "${aws_ecr_repository.commitscope[0].repository_url}:latest" : null
+  )
   common_tags = {
     Project     = var.project
     Environment = var.environment
     ManagedBy   = "terraform"
   }
+}
+
+resource "aws_ecr_repository" "commitscope" {
+  count                = var.create_ecr_repository ? 1 : 0
+  name                 = var.ecr_repository_name
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+  tags = local.common_tags
+}
+
+resource "aws_ecr_lifecycle_policy" "commitscope" {
+  count      = var.create_ecr_repository ? 1 : 0
+  repository = aws_ecr_repository.commitscope[0].name
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep the most recent 10 images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 10
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
 }
 
 resource "aws_s3_bucket" "data_lake" {
@@ -224,7 +258,7 @@ resource "aws_iam_role_policy" "step_functions_policy" {
 }
 
 resource "aws_iam_role" "ecs_task_execution_role" {
-  count = var.container_image_uri != null ? 1 : 0
+  count = local.effective_container_image_uri != null ? 1 : 0
   name  = "${local.name_prefix}-ecs-execution-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -239,13 +273,13 @@ resource "aws_iam_role" "ecs_task_execution_role" {
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_role" {
-  count      = var.container_image_uri != null ? 1 : 0
+  count      = local.effective_container_image_uri != null ? 1 : 0
   role       = aws_iam_role.ecs_task_execution_role[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role" "ecs_task_role" {
-  count = var.container_image_uri != null ? 1 : 0
+  count = local.effective_container_image_uri != null ? 1 : 0
   name  = "${local.name_prefix}-ecs-task-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -260,7 +294,7 @@ resource "aws_iam_role" "ecs_task_role" {
 }
 
 resource "aws_iam_role_policy" "ecs_task_data_lake" {
-  count = var.container_image_uri != null ? 1 : 0
+  count = local.effective_container_image_uri != null ? 1 : 0
   name  = "${local.name_prefix}-ecs-task-data-lake"
   role  = aws_iam_role.ecs_task_role[0].id
   policy = jsonencode({
@@ -279,7 +313,7 @@ resource "aws_iam_role_policy" "ecs_task_data_lake" {
 }
 
 resource "aws_ecs_cluster" "analysis" {
-  count = var.container_image_uri != null ? 1 : 0
+  count = local.effective_container_image_uri != null ? 1 : 0
   name  = "${local.name_prefix}-cluster"
   setting {
     name  = "containerInsights"
@@ -289,7 +323,7 @@ resource "aws_ecs_cluster" "analysis" {
 }
 
 resource "aws_ecs_task_definition" "analysis" {
-  count                    = var.container_image_uri != null ? 1 : 0
+  count                    = local.effective_container_image_uri != null ? 1 : 0
   family                   = "${local.name_prefix}-analysis"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -300,7 +334,7 @@ resource "aws_ecs_task_definition" "analysis" {
   container_definitions = jsonencode([
     {
       name      = "commitscope"
-      image     = var.container_image_uri
+      image     = local.effective_container_image_uri
       essential = true
       command   = ["python", "-m", "commitscope.aws.container"]
       environment = [
@@ -377,7 +411,7 @@ resource "aws_sfn_state_machine" "pipeline" {
           "environment.$" = "$.environment"
         }
         ResultPath = "$.prepared"
-        Next       = var.container_image_uri != null ? "RunAnalysisContainer" : "Complete"
+        Next       = local.effective_container_image_uri != null ? "RunAnalysisContainer" : "Complete"
       }
       RunAnalysisContainer = {
         Type     = "Task"
