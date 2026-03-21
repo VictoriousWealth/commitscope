@@ -7,7 +7,9 @@ from pathlib import Path
 import pandas as pd
 
 from commitscope.config import load_config
+from commitscope.aws.runtime import load_stepfunctions_input
 from commitscope.pipeline.run import run_pipeline
+from commitscope.reporting.manifest import write_runtime_manifest
 from commitscope.reporting.reporting import write_reporting_artifacts
 
 
@@ -20,6 +22,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     report_parser = subparsers.add_parser("report", help="Generate reporting artifacts from local processed files")
     report_parser.add_argument("--config", required=True, help="Path to the JSON config file")
+
+    dispatch_parser = subparsers.add_parser("dispatch", help="Generate Step Functions input for cloud execution")
+    dispatch_parser.add_argument("--config", required=True, help="Path to the JSON config file")
     return parser
 
 
@@ -33,7 +38,13 @@ def main() -> None:
         print(json.dumps({name: str(path) for name, path in outputs.items()}, indent=2))
         return
 
+    if args.command == "dispatch":
+        payload = load_stepfunctions_input(args.config)
+        print(json.dumps(payload, indent=2))
+        return
+
     outputs = write_reporting_artifacts(config, _load_local_tables(config))
+    outputs["runtime_manifest"] = write_runtime_manifest(config, outputs)
     print(json.dumps({name: str(path) for name, path in outputs.items()}, indent=2))
 
 
