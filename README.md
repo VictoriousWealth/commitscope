@@ -10,6 +10,7 @@ CommitScope is an AWS-first analytics pipeline that turns Git history into query
 - S3 outputs under `raw/`, `processed/`, and `curated/`
 - Athena-ready datasets partitioned by `repo`, `branch`, and `commit_date`
 - Terraform scaffold for `eu-west-2` dev infrastructure
+- ECS Fargate scaffold for heavy analysis jobs
 - GitHub Actions CI
 
 ## Local Setup
@@ -25,6 +26,13 @@ Run the pipeline with the example config:
 
 ```bash
 PYTHONPATH=src python -m commitscope.main run --config examples/config.dev.json
+```
+
+Build and run the containerized heavy-analysis path locally:
+
+```bash
+docker build -t commitscope:dev .
+docker run --rm -e COMMITSCOPE_CONFIG=/app/examples/config.dev.json commitscope:dev
 ```
 
 Generate only the local summary and SQL from previously written datasets:
@@ -46,3 +54,7 @@ examples/                Example config
 ## Metric Notes
 
 The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python class and method metrics use static AST heuristics. Non-Python files are included in cross-language file summaries and commit-level aggregates using lightweight textual heuristics rather than full semantic parsers.
+
+## Athena DDL
+
+Running the pipeline also emits concrete Glue/Athena DDL into `outputs/generated/curated/glue_ddl.sql`, alongside example Athena queries in `outputs/generated/curated/athena_queries.sql`.
