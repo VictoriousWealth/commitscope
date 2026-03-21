@@ -114,6 +114,21 @@ resource "aws_iam_role_policy" "lambda_data_lake" {
   })
 }
 
+resource "aws_iam_role_policy" "lambda_stepfunctions_helper" {
+  name = "${local.name_prefix}-lambda-helper"
+  role = aws_iam_role.lambda_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ecs:DescribeTasks"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "glue_role" {
   name = "${local.name_prefix}-glue-role"
   assume_role_policy = jsonencode({
@@ -197,9 +212,12 @@ resource "aws_iam_role_policy" "step_functions_policy" {
         ]
       },
       {
-        Effect   = "Allow"
-        Action   = ["iam:PassRole"]
-        Resource = "*"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.ecs_task_execution_role[0].arn,
+          aws_iam_role.ecs_task_role[0].arn
+        ]
       }
     ]
   })
@@ -309,8 +327,25 @@ data "archive_file" "lambda_zip" {
   output_path = "${path.module}/build/pipeline_lambda.zip"
   source {
     content  = <<-PY
+import json
+
 def handler(event, context):
-    return {"status": "placeholder", "event": event}
+    config_json = event.get("config_json")
+    if isinstance(config_json, dict):
+        config_json = json.dumps(config_json)
+    return {
+        "project": event.get("project", "commitscope"),
+        "environment": event.get("environment", "dev"),
+        "config_json": config_json,
+        "container_overrides": [
+            {
+                "name": "commitscope",
+                "environment": [
+                    {"name": "COMMITSCOPE_CONFIG_JSON", "value": config_json}
+                ],
+            }
+        ],
+    }
 PY
     filename = "handler.py"
   }
@@ -336,7 +371,13 @@ resource "aws_sfn_state_machine" "pipeline" {
       Prepare = {
         Type     = "Task"
         Resource = aws_lambda_function.pipeline.arn
-        Next     = var.container_image_uri != null ? "RunAnalysisContainer" : "Complete"
+        Parameters = {
+          "config_json.$" = "$.config_json"
+          "project.$"     = "$.project"
+          "environment.$" = "$.environment"
+        }
+        ResultPath = "$.prepared"
+        Next       = var.container_image_uri != null ? "RunAnalysisContainer" : "Complete"
       }
       RunAnalysisContainer = {
         Type     = "Task"
@@ -351,6 +392,9 @@ resource "aws_sfn_state_machine" "pipeline" {
               Subnets        = var.subnet_ids
               SecurityGroups = var.security_group_ids
             }
+          }
+          Overrides = {
+            "ContainerOverrides.$" = "$.prepared.container_overrides"
           }
         }
         Next = "Complete"
@@ -383,5 +427,32 @@ CREATE EXTERNAL TABLE IF NOT EXISTS ${var.athena_database}.commit_summary (
 PARTITIONED BY (repo string, branch string, commit_hash string, commit_date string)
 STORED AS PARQUET
 LOCATION 's3://${var.bucket_name}/processed/commit_summary/';
+  SQL
+}
+
+resource "aws_athena_named_query" "class_hotspots" {
+  name        = "${local.name_prefix}-class-hotspots"
+  database    = aws_glue_catalog_database.commitscope.name
+  workgroup   = aws_athena_workgroup.commitscope.name
+  description = "Hotspot classes for QuickSight"
+  query       = <<-SQL
+SELECT commit_date, class_name, wmc, fanin, cbo
+FROM ${var.athena_database}.class_metrics
+WHERE repo = 'YOUR_REPO'
+ORDER BY commit_date, wmc DESC, fanin DESC;
+  SQL
+}
+
+resource "aws_athena_named_query" "language_breakdown" {
+  name        = "${local.name_prefix}-language-breakdown"
+  database    = aws_glue_catalog_database.commitscope.name
+  workgroup   = aws_athena_workgroup.commitscope.name
+  description = "Language footprint for QuickSight"
+  query       = <<-SQL
+SELECT commit_date, language, sum(loc) AS total_loc
+FROM ${var.athena_database}.file_metrics
+WHERE repo = 'YOUR_REPO'
+GROUP BY commit_date, language
+ORDER BY commit_date, total_loc DESC;
   SQL
 }
