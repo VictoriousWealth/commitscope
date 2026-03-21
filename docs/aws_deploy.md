@@ -45,6 +45,9 @@ Set these GitHub repository variables:
 - `TF_ECR_REPOSITORY_NAME`
 - `TF_SUBNET_IDS_JSON`
 - `TF_SECURITY_GROUP_IDS_JSON`
+- `TF_STATE_BUCKET`
+- `TF_STATE_KEY`
+- `TF_LOCK_TABLE` (optional but recommended)
 
 Example variable values:
 
@@ -54,7 +57,12 @@ TF_ATHENA_DATABASE=commitscope_dev
 TF_ECR_REPOSITORY_NAME=commitscope-dev
 TF_SUBNET_IDS_JSON=["subnet-02686afdabd1e9a42","subnet-0158146133e1d6aa0","subnet-08605bc763c0c8c86"]
 TF_SECURITY_GROUP_IDS_JSON=["sg-0c1168281540af705"]
+TF_STATE_BUCKET=commitscope-nick-tfstate
+TF_STATE_KEY=envs/dev/terraform.tfstate
+TF_LOCK_TABLE=commitscope-tf-locks
 ```
+
+The backend bucket and optional lock table must already exist before `deploy-dev.yml` runs. This repo now uses an S3 remote backend, so GitHub runners no longer rely on ephemeral local `terraform.tfstate`.
 
 ## 3. Image Tag Convention
 
@@ -78,6 +86,8 @@ What it does:
 2. reads the ECR repository URL from Terraform outputs
 3. builds and pushes the container image tagged with the Git SHA
 4. runs `terraform apply` again with `container_image_uri=<ecr-url>:<git-sha>`
+
+`terraform init` is performed with `-backend-config=backend.hcl`, generated from the GitHub repo variables above.
 
 ## 5. Live Cloud Execution Path
 
