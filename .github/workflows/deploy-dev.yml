@@ -1,0 +1,84 @@
+name: deploy-dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: AWS region
+        required: true
+        default: eu-west-2
+      terraform_workdir:
+        description: Terraform directory
+        required: true
+        default: infrastructure/terraform/envs/dev
+      image_tag:
+        description: Optional image tag override
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ inputs.aws_region }}
+      TF_WORKDIR: ${{ inputs.terraform_workdir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform init
+
+      - name: Terraform apply base infrastructure
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform apply -auto-approve -var-file=terraform.tfvars
+
+      - name: Capture deployment outputs
+        id: tf
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          echo "ecr_repository_url=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
+          echo "state_machine_arn=$(terraform output -raw state_machine_arn)" >> "$GITHUB_OUTPUT"
+          echo "bucket_name=$(terraform output -raw data_lake_bucket)" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Resolve image tag
+        id: image
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          if [ -z "$IMAGE_TAG" ]; then
+            IMAGE_TAG="$SHORT_SHA"
+          fi
+          IMAGE_URI="${{ steps.tf.outputs.ecr_repository_url }}:${IMAGE_TAG}"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        run: |
+          docker build -t "${{ steps.image.outputs.image_uri }}" .
+          docker push "${{ steps.image.outputs.image_uri }}"
+
+      - name: Terraform apply runtime image
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          terraform apply -auto-approve \
+            -var-file=terraform.tfvars \
+            -var "container_image_uri=${{ steps.image.outputs.image_uri }}"
+
+      - name: Emit deployment summary
+        run: |
+          echo "State machine: ${{ steps.tf.outputs.state_machine_arn }}"
+          echo "Bucket: ${{ steps.tf.outputs.bucket_name }}"
+          echo "Image: ${{ steps.image.outputs.image_uri }}"
