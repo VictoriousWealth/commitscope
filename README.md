@@ -75,9 +75,30 @@ The reporting layer emits QuickSight-ready dashboard and dataset definitions int
 - `outputs/generated/curated/quicksight_dashboard.json`
 - `outputs/generated/curated/runtime_manifest.json`
 
+The dev environment also includes a provisioning helper:
+
+```bash
+.venv/bin/python scripts/provision_quicksight.py
+```
+
+That script creates or updates:
+
+- the Athena data source `commitscope-athena`
+- the direct-query datasets:
+  - `commitscope-dev-commit-summary`
+  - `commitscope-dev-class-metrics`
+  - `commitscope-dev-file-metrics`
+
+After a successful Step Functions execution, the state machine starts the Glue
+crawler automatically. Because the QuickSight datasets use direct query against
+Athena, new data becomes queryable in QuickSight after the crawler refreshes
+the partitions. The remaining manual QuickSight step is arranging dashboard
+visuals in the QuickSight UI.
+
 ## AWS Deployment
 
 The exact dev deployment flow is documented in [aws_deploy.md](/Users/efeon/commitscope/docs/aws_deploy.md).
+The exact manual-only execution flow is documented in [manual_execution.md](/Users/efeon/commitscope/docs/manual_execution.md).
 
 Minimal cloud run sequence:
 
