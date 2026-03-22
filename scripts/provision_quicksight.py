@@ -18,6 +18,7 @@ class TableSpec:
 TABLE_SPECS = (
     TableSpec("commitscope-dev-commit-summary", "CommitScope Commit Summary", "commit_summary", "commitsummary"),
     TableSpec("commitscope-dev-class-metrics", "CommitScope Class Metrics", "class_metrics", "classmetrics"),
+    TableSpec("commitscope-dev-method-metrics", "CommitScope Method Metrics", "method_metrics", "methodmetrics"),
     TableSpec("commitscope-dev-file-metrics", "CommitScope File Metrics", "file_metrics", "filemetrics"),
 )
 
@@ -323,10 +324,17 @@ def ensure_dashboard(
             Definition=definition,
             ValidationStrategy={"Mode": "LENIENT"},
         )
+        latest_version = max(
+            version["VersionNumber"]
+            for version in qs.list_dashboard_versions(
+                AwsAccountId=aws_account_id,
+                DashboardId=dashboard_id,
+            )["DashboardVersionSummaryList"]
+        )
         qs.update_dashboard_published_version(
             AwsAccountId=aws_account_id,
             DashboardId=dashboard_id,
-            VersionNumber=existing["Version"]["VersionNumber"],
+            VersionNumber=latest_version,
         )
         return existing["Arn"]
     except qs.exceptions.ResourceNotFoundException:
@@ -346,13 +354,14 @@ def build_asset_definition(dataset_arns: dict[str, str]) -> dict[str, Any]:
         "DataSetIdentifierDeclarations": [
             {"Identifier": "commit_summary", "DataSetArn": dataset_arns["commitscope-dev-commit-summary"]},
             {"Identifier": "class_metrics", "DataSetArn": dataset_arns["commitscope-dev-class-metrics"]},
+            {"Identifier": "method_metrics", "DataSetArn": dataset_arns["commitscope-dev-method-metrics"]},
             {"Identifier": "file_metrics", "DataSetArn": dataset_arns["commitscope-dev-file-metrics"]},
         ],
         "Sheets": [
             {
-                "SheetId": "overview",
-                "Name": "Overview",
-                "Title": "CommitScope Overview",
+                "SheetId": "repo-trends",
+                "Name": "Repo Trends",
+                "Title": "Repository Trends",
                 "Visuals": [
                     line_chart_visual(
                         visual_id="avg-wmc-trend",
@@ -360,27 +369,44 @@ def build_asset_definition(dataset_arns: dict[str, str]) -> dict[str, Any]:
                         dataset_identifier="commit_summary",
                         category_column="commit_date",
                         value_column="avg_wmc",
+                        aggregation="AVERAGE",
                     ),
-                    bar_chart_visual(
+                    line_chart_visual(
+                        visual_id="peak-cc-trend",
+                        title="Peak CC by Commit Date",
+                        dataset_identifier="commit_summary",
+                        category_column="commit_date",
+                        value_column="max_cc",
+                        aggregation="MAX",
+                    ),
+                    line_chart_visual(
                         visual_id="total-loc-trend",
                         title="Total LOC by Commit Date",
                         dataset_identifier="commit_summary",
                         category_column="commit_date",
                         value_column="total_loc",
+                        aggregation="SUM",
                     ),
                     pie_chart_visual(
                         visual_id="language-footprint",
-                        title="Language Footprint",
+                        title="Language Footprint by LOC",
                         dataset_identifier="file_metrics",
-                        category_column="language",
-                        value_column="loc",
+                        group_column="language",
+                        size_column="loc",
+                        aggregation="SUM",
                     ),
                     table_visual(
-                        visual_id="hotspot-classes",
-                        title="Hotspot Classes",
-                        dataset_identifier="class_metrics",
-                        group_by_columns=["commit_date", "class_name"],
-                        value_columns=["wmc", "fanin", "cbo", "rfc"],
+                        visual_id="commit-summary-table",
+                        title="Commit Summary Snapshot",
+                        dataset_identifier="commit_summary",
+                        group_by_columns=["commit_date"],
+                        value_columns=[
+                            ("total_classes", "MAX"),
+                            ("total_methods", "MAX"),
+                            ("total_files", "MAX"),
+                            ("total_loc", "MAX"),
+                            ("max_cc", "MAX"),
+                        ],
                     ),
                 ],
                 "Layouts": [
@@ -390,8 +416,152 @@ def build_asset_definition(dataset_arns: dict[str, str]) -> dict[str, Any]:
                                 "Elements": [
                                     grid_element("avg-wmc-trend", 0, 18, 0, 8),
                                     grid_element("total-loc-trend", 18, 18, 0, 8),
-                                    grid_element("language-footprint", 0, 12, 8, 8),
-                                    grid_element("hotspot-classes", 12, 24, 8, 12),
+                                    grid_element("peak-cc-trend", 0, 18, 8, 8),
+                                    grid_element("language-footprint", 18, 18, 8, 8),
+                                    grid_element("commit-summary-table", 0, 36, 16, 12),
+                                ],
+                                "CanvasSizeOptions": {
+                                    "ScreenCanvasSizeOptions": {
+                                        "ResizeOption": "FIXED",
+                                        "OptimizedViewPortWidth": "1600px",
+                                    }
+                                },
+                            }
+                        }
+                    }
+                ],
+            }
+            ,
+            {
+                "SheetId": "class-hotspots",
+                "Name": "Class Hotspots",
+                "Title": "Class Hotspots",
+                "Visuals": [
+                    scatter_plot_visual(
+                        visual_id="lcom-vs-cbo",
+                        title="LCOM vs CBO",
+                        dataset_identifier="class_metrics",
+                        x_column="lcom",
+                        y_column="cbo",
+                    ),
+                    scatter_plot_visual(
+                        visual_id="wmc-vs-fanin",
+                        title="WMC vs FANIN",
+                        dataset_identifier="class_metrics",
+                        x_column="wmc",
+                        y_column="fanin",
+                    ),
+                    bar_chart_visual(
+                        visual_id="rfc-by-class",
+                        title="Peak RFC by Class",
+                        dataset_identifier="class_metrics",
+                        category_column="class_name",
+                        value_column="rfc",
+                        aggregation="MAX",
+                    ),
+                    pie_chart_visual(
+                        visual_id="class-share",
+                        title="Class Share by WMC",
+                        dataset_identifier="class_metrics",
+                        group_column="class_name",
+                        size_column="wmc",
+                        aggregation="MAX",
+                    ),
+                    table_visual(
+                        visual_id="class-hotspot-table",
+                        title="Class Hotspot Detail",
+                        dataset_identifier="class_metrics",
+                        group_by_columns=["class_name", "language"],
+                        value_columns=[
+                            ("wmc", "MAX"),
+                            ("fanin", "MAX"),
+                            ("cbo", "MAX"),
+                            ("rfc", "MAX"),
+                            ("lcom", "MAX"),
+                        ],
+                    ),
+                ],
+                "Layouts": [
+                    {
+                        "Configuration": {
+                            "GridLayout": {
+                                "Elements": [
+                                    grid_element("lcom-vs-cbo", 0, 18, 0, 10),
+                                    grid_element("class-share", 18, 18, 0, 10),
+                                    grid_element("wmc-vs-fanin", 0, 18, 10, 10),
+                                    grid_element("rfc-by-class", 18, 18, 10, 10),
+                                    grid_element("class-hotspot-table", 0, 36, 20, 12),
+                                ],
+                                "CanvasSizeOptions": {
+                                    "ScreenCanvasSizeOptions": {
+                                        "ResizeOption": "FIXED",
+                                        "OptimizedViewPortWidth": "1600px",
+                                    }
+                                },
+                            }
+                        }
+                    }
+                ],
+            },
+            {
+                "SheetId": "method-hotspots",
+                "Name": "Method Hotspots",
+                "Title": "Method Hotspots",
+                "Visuals": [
+                    scatter_plot_visual(
+                        visual_id="cc-vs-loc",
+                        title="CC vs LOC",
+                        dataset_identifier="method_metrics",
+                        x_column="cc",
+                        y_column="loc",
+                    ),
+                    scatter_plot_visual(
+                        visual_id="fanin-vs-fanout-methods",
+                        title="Method FANIN vs FANOUT",
+                        dataset_identifier="method_metrics",
+                        x_column="fanout",
+                        y_column="fanin",
+                    ),
+                    bar_chart_visual(
+                        visual_id="cc-by-method",
+                        title="Peak CC by Method",
+                        dataset_identifier="method_metrics",
+                        category_column="method_name",
+                        value_column="cc",
+                        aggregation="MAX",
+                    ),
+                    pie_chart_visual(
+                        visual_id="method-share",
+                        title="Method Share by LOC",
+                        dataset_identifier="method_metrics",
+                        group_column="method_name",
+                        size_column="loc",
+                        aggregation="MAX",
+                    ),
+                    table_visual(
+                        visual_id="method-hotspot-table",
+                        title="Method Hotspot Detail",
+                        dataset_identifier="method_metrics",
+                        group_by_columns=["class_name", "method_name"],
+                        value_columns=[
+                            ("cc", "MAX"),
+                            ("loc", "MAX"),
+                            ("fanin", "MAX"),
+                            ("fanout", "MAX"),
+                            ("parameters", "MAX"),
+                        ],
+                    ),
+                ],
+                "Layouts": [
+                    {
+                        "Configuration": {
+                            "GridLayout": {
+                                "Elements": [
+                                    grid_element("cc-vs-loc", 0, 18, 0, 10),
+                                    grid_element("method-share", 18, 18, 0, 10),
+                                    grid_element("fanin-vs-fanout-methods", 0, 18, 10, 10),
+                                    grid_element("cc-by-method", 18, 18, 10, 10),
+                                    grid_element("method-hotspot-table", 0, 36, 20, 12),
                                 ],
                                 "CanvasSizeOptions": {
                                     "ScreenCanvasSizeOptions": {
@@ -415,6 +585,7 @@ def line_chart_visual(
     dataset_identifier: str,
     category_column: str,
     value_column: str,
+    aggregation: str,
 ) -> dict[str, Any]:
     return {
         "LineChartVisual": {
@@ -424,7 +595,7 @@ def line_chart_visual(
                 "FieldWells": {
                     "LineChartAggregatedFieldWells": {
                         "Category": [categorical_dimension(dataset_identifier, category_column)],
-                        "Values": [numerical_measure(dataset_identifier, value_column, "AVERAGE")],
+                        "Values": [numerical_measure(dataset_identifier, value_column, aggregation)],
                     }
                 }
             },
@@ -439,6 +610,7 @@ def bar_chart_visual(
     dataset_identifier: str,
     category_column: str,
     value_column: str,
+    aggregation: str,
 ) -> dict[str, Any]:
     return {
         "BarChartVisual": {
@@ -448,7 +620,7 @@ def bar_chart_visual(
                 "FieldWells": {
                     "BarChartAggregatedFieldWells": {
                         "Category": [categorical_dimension(dataset_identifier, category_column)],
-                        "Values": [numerical_measure(dataset_identifier, value_column, "SUM")],
+                        "Values": [numerical_measure(dataset_identifier, value_column, aggregation)],
                     }
                 }
             },
@@ -461,8 +633,9 @@ def pie_chart_visual(
     visual_id: str,
     title: str,
     dataset_identifier: str,
-    category_column: str,
-    value_column: str,
+    group_column: str,
+    size_column: str,
+    aggregation: str,
 ) -> dict[str, Any]:
     return {
         "PieChartVisual": {
@@ -471,8 +644,8 @@ def pie_chart_visual(
             "ChartConfiguration": {
                 "FieldWells": {
                     "PieChartAggregatedFieldWells": {
-                        "Category": [categorical_dimension(dataset_identifier, category_column)],
-                        "Values": [numerical_measure(dataset_identifier, value_column, "SUM")],
+                        "Category": [categorical_dimension(dataset_identifier, group_column)],
+                        "Values": [numerical_measure(dataset_identifier, size_column, aggregation)],
                     }
                 }
             },
@@ -486,7 +659,7 @@ def table_visual(
     title: str,
     dataset_identifier: str,
     group_by_columns: list[str],
-    value_columns: list[str],
+    value_columns: list[tuple[str, str]],
 ) -> dict[str, Any]:
     return {
         "TableVisual": {
@@ -496,7 +669,56 @@ def table_visual(
                 "FieldWells": {
                     "TableAggregatedFieldWells": {
                         "GroupBy": [categorical_dimension(dataset_identifier, column) for column in group_by_columns],
-                        "Values": [numerical_measure(dataset_identifier, column, "SUM") for column in value_columns],
+                        "Values": [numerical_measure(dataset_identifier, column, aggregation) for column, aggregation in value_columns],
+                    }
+                }
+            },
+        }
+    }
+
+
+def scatter_plot_visual(
+    *,
+    visual_id: str,
+    title: str,
+    dataset_identifier: str,
+    x_column: str,
+    y_column: str,
+) -> dict[str, Any]:
+    return {
+        "ScatterPlotVisual": {
+            "VisualId": visual_id,
+            "Title": {"Visibility": "VISIBLE", "FormatText": {"PlainText": title}},
+            "ChartConfiguration": {
+                "FieldWells": {
+                    "ScatterPlotUnaggregatedFieldWells": {
+                        "XAxis": [numerical_dimension(dataset_identifier, x_column)],
+                        "YAxis": [numerical_dimension(dataset_identifier, y_column)],
+                    }
+                }
+            },
+        }
+    }
+
+
+def tree_map_visual(
+    *,
+    visual_id: str,
+    title: str,
+    dataset_identifier: str,
+    group_column: str,
+    size_column: str,
+    aggregation: str,
+) -> dict[str, Any]:
+    return {
+        "TreeMapVisual": {
+            "VisualId": visual_id,
+            "Title": {"Visibility": "VISIBLE", "FormatText": {"PlainText": title}},
+            "ChartConfiguration": {
+                "FieldWells": {
+                    "TreeMapAggregatedFieldWells": {
+                        "Groups": [categorical_dimension(dataset_identifier, group_column)],
+                        "Sizes": [numerical_measure(dataset_identifier, size_column, aggregation)],
                     }
                 }
             },
@@ -507,6 +729,18 @@ def table_visual(
 def categorical_dimension(dataset_identifier: str, column_name: str) -> dict[str, Any]:
     return {
         "CategoricalDimensionField": {
+            "FieldId": f"{dataset_identifier}-{column_name}-dimension",
+            "Column": {
+                "DataSetIdentifier": dataset_identifier,
+                "ColumnName": column_name,
+            },
+        }
+    }
+
+
+def numerical_dimension(dataset_identifier: str, column_name: str) -> dict[str, Any]:
+    return {
+        "NumericalDimensionField": {
             "FieldId": f"{dataset_identifier}-{column_name}-dimension",
             "Column": {
                 "DataSetIdentifier": dataset_identifier,
