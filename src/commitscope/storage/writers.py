@@ -6,7 +6,6 @@ from pathlib import Path
 import pandas as pd
 
 from commitscope.config import AppConfig
-from commitscope.storage.s3 import upload_directory_to_s3
 from commitscope.utils.fs import ensure_dir
 
 
@@ -37,9 +36,6 @@ def write_processed_outputs(config: AppConfig, tables: dict[str, list[dict]]) ->
             frame.to_csv(table_root / f"{table_name}.csv", index=False)
         if config.storage.write_local_parquet:
             _write_partitioned_parquet(frame, table_root)
-
-    if config.storage.write_s3:
-        upload_directory_to_s3(output_root, config.storage.s3_bucket, "", config.aws_region)
 
     return paths
 
