@@ -244,9 +244,16 @@ resource "aws_iam_role_policy" "step_functions_policy" {
       },
       {
         Effect = "Allow"
-        Action = ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks"]
+        Action = ["ecs:RunTask"]
         Resource = [
-          aws_ecs_task_definition.analysis[0].arn
+          "${aws_ecs_task_definition.analysis[0].arn_without_revision}:*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["ecs:StopTask", "ecs:DescribeTasks"]
+        Resource = [
+          "*"
         ]
       },
       {
