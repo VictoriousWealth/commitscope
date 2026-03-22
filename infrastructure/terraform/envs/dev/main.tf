@@ -390,9 +390,9 @@ def handler(event, context):
         "config_json": config_json,
         "container_overrides": [
             {
-                "name": "commitscope",
-                "environment": [
-                    {"name": "COMMITSCOPE_CONFIG_JSON", "value": config_json}
+                "Name": "commitscope",
+                "Environment": [
+                    {"Name": "COMMITSCOPE_CONFIG_JSON", "Value": config_json}
                 ],
             }
         ],
