@@ -20,7 +20,7 @@ def prepare_execution_handler(event: dict, _context: object) -> dict:
     config = _config_from_event(event)
     config.runtime.execution_mode = "stepfunctions"
     container_env = [
-        {"name": "COMMITSCOPE_CONFIG_JSON", "value": json.dumps(asdict(config))},
+        {"Name": "COMMITSCOPE_CONFIG_JSON", "Value": json.dumps(asdict(config))},
     ]
     return {
         "project": config.project,
@@ -28,8 +28,8 @@ def prepare_execution_handler(event: dict, _context: object) -> dict:
         "config_json": json.dumps(asdict(config)),
         "container_overrides": [
             {
-                "name": "commitscope",
-                "environment": container_env,
+                "Name": "commitscope",
+                "Environment": container_env,
             }
         ],
     }
