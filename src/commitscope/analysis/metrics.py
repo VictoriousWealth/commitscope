@@ -17,6 +17,9 @@ class AnalysisResult:
     commit_summary: dict
 
 
+SUPPORTED_C_STYLE_LANGUAGES = {"java", "javascript", "typescript"}
+
+
 class PythonAnalyzer(ast.NodeVisitor):
     def __init__(self, module_name: str, known_classes: dict[str, list[str]]) -> None:
         self.module_name = module_name
@@ -213,10 +216,161 @@ class PythonAnalyzer(ast.NodeVisitor):
         return calls
 
 
+@dataclass(slots=True)
+class TextMethod:
+    class_name: str
+    method_name: str
+    method_simple_name: str
+    body: str
+    loc: int
+    lloc: int
+    parameters: int
+    fanout: int
+    cc: int
+    instance_vars: set[str]
+    direct_calls: set[str]
+    class_refs: set[str]
+
+
+@dataclass(slots=True)
+class TextClass:
+    class_name: str
+    language: str
+    methods: list[TextMethod]
+
+
+class CStyleAnalyzer:
+    def __init__(self, language: str, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.language = language
+        self.relative_path = relative_path
+        self.source = source
+        self.known_class_names = known_class_names
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        classes = self._extract_classes()
+        if not classes:
+            return [], []
+
+        method_callers: dict[str, set[str]] = defaultdict(set)
+        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+
+        class_rows: list[dict] = []
+        method_rows: list[dict] = []
+
+        method_index = {
+            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
+            for text_class in classes
+            for method in text_class.methods
+        }
+
+        for text_class in classes:
+            for method in text_class.methods:
+                caller = method.method_name
+                for target in method.direct_calls:
+                    for candidate in method_index.get(target, []):
+                        if candidate.method_name != caller:
+                            method_callers[candidate.method_name].add(caller)
+                            class_fanin_sources[candidate.class_name].add(method.class_name)
+
+        for text_class in classes:
+            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
+            class_rows.append(
+                {
+                    "class_name": text_class.class_name,
+                    "wmc": sum(method.cc for method in text_class.methods),
+                    "lcom": self._compute_lcom(lcom_sources),
+                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
+                    "fanout": sum(method.fanout for method in text_class.methods),
+                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
+                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
+                    "language": text_class.language,
+                }
+            )
+            for method in text_class.methods:
+                method_rows.append(
+                    {
+                        "class_name": text_class.class_name,
+                        "method_name": method.method_name,
+                        "cc": method.cc,
+                        "loc": method.loc,
+                        "lloc": method.lloc,
+                        "parameters": method.parameters,
+                        "fanin": len(method_callers.get(method.method_name, set())),
+                        "fanout": method.fanout,
+                        "language": text_class.language,
+                    }
+                )
+        return class_rows, method_rows
+
+    def _extract_classes(self) -> list[TextClass]:
+        class_pattern = re.compile(r"\bclass\s+([A-Za-z_]\w*)")
+        classes: list[TextClass] = []
+        for match in class_pattern.finditer(self.source):
+            class_name = match.group(1)
+            open_brace = self.source.find("{", match.end())
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(self.source, open_brace)
+            if close_brace == -1:
+                continue
+            body = self.source[open_brace + 1 : close_brace]
+            qualified = f"{self.relative_path}.{class_name}"
+            methods = self._extract_methods(body, qualified, class_name)
+            classes.append(TextClass(class_name=qualified, language=self.language, methods=methods))
+        return classes
+
+    def _extract_methods(self, class_body: str, qualified_class_name: str, class_name: str) -> list[TextMethod]:
+        methods: list[TextMethod] = []
+        method_pattern = _method_pattern_for_language(self.language, class_name)
+        for match in method_pattern.finditer(class_body):
+            method_simple_name = match.group("name")
+            params = match.group("params") or ""
+            open_brace = class_body.find("{", match.end() - 1)
+            if open_brace == -1:
+                continue
+            close_brace = _find_matching_brace(class_body, open_brace)
+            if close_brace == -1:
+                continue
+            body = class_body[open_brace + 1 : close_brace]
+            loc = body.count("\n") + 2
+            meaningful_lines = [line for line in body.splitlines() if line.strip() and line.strip() not in {"{", "}"}]
+            methods.append(
+                TextMethod(
+                    class_name=qualified_class_name,
+                    method_name=f"{qualified_class_name}.{method_simple_name}",
+                    method_simple_name=method_simple_name,
+                    body=body,
+                    loc=loc,
+                    lloc=len(meaningful_lines) or 1,
+                    parameters=_parameter_count_from_text(params),
+                    fanout=len(re.findall(r"\b([A-Za-z_]\w*)\s*\(", body)),
+                    cc=_complexity_from_text(body),
+                    instance_vars=set(re.findall(r"\bthis\.([A-Za-z_]\w*)", body)),
+                    direct_calls=set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", body)),
+                    class_refs={f"{self.relative_path}.{ref}" for ref in self.known_class_names if ref in re.findall(r"\b([A-Z][A-Za-z0-9_]*)\b", body)},
+                )
+            )
+        return methods
+
+    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
+        methods = list(method_access)
+        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
+        p = 0
+        q = 0
+        for left, right in pairs:
+            if method_access[left] & method_access[right]:
+                q += 1
+            else:
+                p += 1
+        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
+
+
 def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: str, branch: str, commit_date: str) -> AnalysisResult:
     python_trees: dict[str, ast.AST] = {}
+    text_sources: dict[str, tuple[str, str]] = {}
     file_metrics: list[dict] = []
     known_classes: dict[str, list[str]] = defaultdict(list)
+    known_text_class_names: set[str] = set()
 
     for path in sorted(repo_root.rglob("*")):
         if not path.is_file() or ".git" in path.parts:
@@ -235,6 +389,14 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef):
                     known_classes[node.name].append(f"{relative}.{node.name}")
+        elif language in SUPPORTED_C_STYLE_LANGUAGES:
+            try:
+                source = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            text_sources[relative] = (language, source)
+            for class_name in re.findall(r"\bclass\s+([A-Za-z_]\w*)", source):
+                known_text_class_names.add(class_name)
 
     class_rows: list[dict] = []
     method_rows: list[dict] = []
@@ -245,6 +407,13 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
         module_classes, module_methods = analyzer.finalize()
         class_rows.extend(_annotate_rows(module_classes, repo_name, branch, commit_hash, commit_date))
         method_rows.extend(_annotate_rows(module_methods, repo_name, branch, commit_hash, commit_date))
+    for relative, (language, source) in text_sources.items():
+        analyzer = CStyleAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+        module_classes, module_methods = analyzer.analyze()
+        class_rows.extend(_annotate_rows(module_classes, repo_name, branch, commit_hash, commit_date))
+        method_rows.extend(_annotate_rows(module_methods, repo_name, branch, commit_hash, commit_date))
+
+    analyzed_method_languages = {"python", *SUPPORTED_C_STYLE_LANGUAGES}
 
     summary = {
         "repo": repo_name,
@@ -256,7 +425,7 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
         "avg_wmc": _average([row["wmc"] for row in class_rows]),
         "avg_lcom": _average([row["lcom"] for row in class_rows]),
         "max_cc": max((row["cc"] for row in method_rows), default=0),
-        "total_loc": sum(row["loc"] for row in method_rows) + sum(row["loc"] for row in file_metrics if row["language"] != "python"),
+        "total_loc": sum(row["loc"] for row in method_rows) + sum(row["loc"] for row in file_metrics if row["language"] not in analyzed_method_languages),
         "total_files": len(file_metrics),
         "python_files": sum(1 for row in file_metrics if row["language"] == "python"),
         "non_python_files": sum(1 for row in file_metrics if row["language"] != "python"),
@@ -300,3 +469,41 @@ def _average(values: list[float | int]) -> float:
     if not values:
         return 0.0
     return round(sum(values) / len(values), 4)
+
+
+def _find_matching_brace(text: str, open_brace_index: int) -> int:
+    depth = 0
+    for index in range(open_brace_index, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _method_pattern_for_language(language: str, class_name: str) -> re.Pattern[str]:
+    if language == "java":
+        return re.compile(
+            r"(?:public|protected|private|static|final|synchronized|abstract|\s)+"
+            r"(?:[A-Za-z_<>\[\],?]+\s+)?(?P<name>" + re.escape(class_name) + r"|[A-Za-z_]\w*)\s*"
+            r"\((?P<params>[^)]*)\)\s*\{",
+            re.MULTILINE,
+        )
+    return re.compile(
+        r"(?:public|protected|private|static|async|get|set|readonly|override|abstract|\s)*"
+        r"(?P<name>constructor|[A-Za-z_]\w*)\s*\((?P<params>[^)]*)\)\s*(?::[^{=]+)?\s*\{",
+        re.MULTILINE,
+    )
+
+
+def _parameter_count_from_text(params: str) -> int:
+    cleaned = [param.strip() for param in params.split(",") if param.strip()]
+    return len(cleaned)
+
+
+def _complexity_from_text(body: str) -> int:
+    branch_tokens = len(re.findall(r"\b(if|for|while|case|catch|switch|else\s+if)\b|&&|\|\|", body))
+    return branch_tokens + 1 if body.strip() else 0
