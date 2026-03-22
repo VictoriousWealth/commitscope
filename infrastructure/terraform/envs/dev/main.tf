@@ -349,6 +349,7 @@ resource "aws_ecs_cluster" "analysis" {
 resource "aws_ecs_task_definition" "analysis" {
   count                    = local.effective_container_image_uri != null ? 1 : 0
   family                   = "${local.name_prefix}-analysis"
+  skip_destroy             = true
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "1024"
