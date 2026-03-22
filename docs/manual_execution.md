@@ -273,6 +273,8 @@ Current status in this AWS account:
   - `commitscope-dev-commit-summary`
   - `commitscope-dev-class-metrics`
   - `commitscope-dev-file-metrics`
+- analysis `CommitScope Dev Overview` exists in `eu-west-2`
+- dashboard `CommitScope Dev Overview` exists in `eu-west-2`
 - the state machine starts the Glue crawler automatically after the ECS task succeeds
 
 Provision or refresh the QuickSight data source and datasets with:
@@ -290,9 +292,10 @@ What is automatic now:
 
 What is still manual:
 
-- arranging the actual dashboard visuals in the QuickSight console
+- refining the visual layout if you want something more polished than the baseline dashboard
+- adding more visuals, filters, themes, or access controls in the QuickSight console
 
-So QuickSight is wired up at the data layer, but the final dashboard layout is still a console-authoring task.
+So QuickSight is now working for the MVP. The remaining QuickSight work is improvement work, not unblocker work.
 
 ## 10. What To Change For A Real Repo
 
@@ -321,7 +324,4 @@ This project is working as an MVP when all of these are true:
 4. Glue crawler succeeds
 5. Athena can query the discovered tables
 6. QuickSight datasets can query the Athena-backed tables
-
-QuickSight dashboard visuals are not yet part of the fully automated path. The
-data source, datasets, and refresh path are in place; the remaining work is the
-dashboard presentation layer inside QuickSight.
+7. the baseline QuickSight dashboard loads successfully
