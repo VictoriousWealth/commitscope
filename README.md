@@ -1,140 +1,82 @@
 # CommitScope
 
-CommitScope is an AWS-first analytics pipeline that turns Git history into queryable code-health datasets. The MVP clones a public GitHub repository, walks a configurable commit range, computes notebook-aligned static-analysis heuristics, writes JSON/CSV/Parquet outputs locally and to S3, and prepares Athena-backed datasets for QuickSight.
+CommitScope turns Git history into queryable code-health datasets and dashboards. It deploys an AWS pipeline with Terraform, runs analysis in ECS via Step Functions, stores raw and processed outputs in S3, catalogs them with Glue, queries them with Athena, and visualizes them in QuickSight.
 
-## MVP Scope
+## What Works
 
-- GitHub URL input for public repositories
-- Configurable commit range via branch, `max_commits`, `since`, `until`, `from_commit`, and `to_commit`
-- Local outputs in JSON, CSV, and Parquet
-- S3 outputs under `raw/`, `processed/`, and `curated/`
-- Athena-ready datasets partitioned by `repo`, `branch`, and `commit_date`
-- Config-driven execution for local runs or Step Functions -> ECS Fargate
-- QuickSight dashboard definition artifacts
-- Terraform scaffold for `eu-west-2` dev infrastructure
-- ECS Fargate scaffold for heavy analysis jobs
-- GitHub Actions CI
+- GitHub Actions deploys the dev environment in AWS
+- Step Functions runs the analysis pipeline end-to-end
+- ECS Fargate executes the analysis container successfully
+- outputs are written to S3 under `raw/`, `processed/`, and `curated/`
+- Glue catalogs the generated datasets
+- Athena queries the processed metrics
+- QuickSight dashboards read the Athena-backed datasets directly
 
-## Local Setup
+## Architecture
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
+`GitHub Actions -> Terraform -> Step Functions -> Lambda -> ECS Fargate -> S3 -> Glue -> Athena -> QuickSight`
 
-Run the pipeline with the example config:
+## Evidence
 
-```bash
-PYTHONPATH=src python -m commitscope.main run --config examples/config.dev.json
-```
+### Deployment
 
-Generate the Step Functions payload for cloud execution:
+![GitHub Actions deploy success](docs/github-actions-deploy-success-preview-screenshot.png)
+![GitHub Actions deploy details](docs/github-actions-deploy-success-detailed-screenshot.png)
 
-```bash
-PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json
-```
+### Workflow Execution
 
-Build and run the containerized heavy-analysis path locally:
+![Step Functions execution success](docs/step-functions-execution-success.png)
+![Step Functions state graph](docs/aws-state-machine-pipeline-graph.png)
+![ECS task exit code 0](docs/ecs-task-exit-code-0-screenshot.png)
 
-```bash
-docker build -t commitscope:dev .
-docker run --rm -e COMMITSCOPE_CONFIG=/app/examples/config.dev.json commitscope:dev
-```
+### Data Outputs
 
-Generate only the local summary and SQL from previously written datasets:
+![S3 output prefixes](docs/s3-outputs-bucket-viewing-screenshot.png)
+![S3 curated outputs](docs/s3-outputs-bucket-viewing-curated-folder-screenshot.png)
+![Glue crawler successful runs](docs/glue-crawler-list-of-succssful-runs-screenshot.png)
+![Athena query results](docs/athena-query-results-screenshot.png)
 
-```bash
-PYTHONPATH=src python -m commitscope.main report --config examples/config.dev.json
-```
+### Dashboards
 
-## Repo Layout
+![QuickSight repository trends](docs/quicksight-repository-trends-screenshot.png)
+![QuickSight class hotspots](docs/quicksight-classes-hotspots-screenshot.png)
+![QuickSight method hotspots](docs/quicksight-methods-hotspots-screenshot.png)
 
-```text
-src/commitscope/         Python pipeline code
-infrastructure/terraform Terraform for dev AWS resources
-tests/                   Unit tests
-docs/                    Metric contract and architecture notes
-examples/                Example config
-```
+## Metrics
 
-## Metric Notes
+The pipeline computes and exposes:
 
-The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python class and method metrics use static AST heuristics. Non-Python files are included in cross-language file summaries and commit-level aggregates using lightweight textual heuristics rather than full semantic parsers.
+- `WMC`
+- `LCOM`
+- `CC`
+- `FANIN`
+- `FANOUT`
+- `CBO`
+- `RFC`
+- `LOC`
+- `LLOC`
+- commit-level repository summaries
 
-## Athena DDL
+Metric semantics and approximations are documented in [metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md).
 
-Running the pipeline also emits concrete Glue/Athena DDL into `outputs/generated/curated/glue_ddl.sql`, alongside example Athena queries in `outputs/generated/curated/athena_queries.sql`.
+## Language Support
 
-## QuickSight
+- Python: AST-backed class and method analysis
+- Java: heuristic class and method analysis
+- JavaScript: heuristic class and method analysis
+- TypeScript: heuristic class and method analysis
+- other languages: file-level summaries where supported by the language mapper
 
-The reporting layer emits QuickSight-ready dashboard and dataset definitions into:
+## Implementation Evidence
 
-- `outputs/generated/curated/quicksight_datasets.json`
-- `outputs/generated/curated/quicksight_dashboard.json`
-- `outputs/generated/curated/runtime_manifest.json`
+- Terraform orchestration: [main.tf](/Users/efeon/commitscope/infrastructure/terraform/envs/dev/main.tf)
+- QuickSight provisioning automation: [provision_quicksight.py](/Users/efeon/commitscope/scripts/provision_quicksight.py)
+- Manual operating procedure: [manual_execution.md](/Users/efeon/commitscope/docs/manual_execution.md)
+- Container run notes: [container_run.md](/Users/efeon/commitscope/docs/container_run.md)
 
-The dev environment also includes a provisioning helper:
+## Docs
 
-```bash
-.venv/bin/python scripts/provision_quicksight.py
-```
-
-That script creates or updates:
-
-- the Athena data source `commitscope-athena`
-- the direct-query datasets:
-  - `commitscope-dev-commit-summary`
-  - `commitscope-dev-class-metrics`
-  - `commitscope-dev-file-metrics`
-- the analysis `CommitScope Dev Overview`
-- the dashboard `CommitScope Dev Overview`
-
-After a successful Step Functions execution, the state machine starts the Glue
-crawler automatically. Because the QuickSight datasets use direct query against
-Athena, new data becomes queryable in QuickSight after the crawler refreshes
-the partitions. You can keep editing the generated analysis and dashboard in
-the QuickSight UI, but the baseline QuickSight assets now exist in AWS.
-
-## AWS Deployment
-
-The exact dev deployment flow is documented in [aws_deploy.md](/Users/efeon/commitscope/docs/aws_deploy.md).
-The exact manual-only execution flow is documented in [manual_execution.md](/Users/efeon/commitscope/docs/manual_execution.md).
-
-Minimal cloud run sequence:
-
-1. set GitHub repo secrets:
-   - `AWS_GITHUB_ACTIONS_ROLE_ARN`
-   - `AWS_ACCOUNT_ID`
-2. set GitHub repo variables:
-   - `TF_BUCKET_NAME`
-   - `TF_ATHENA_DATABASE`
-   - `TF_ECR_REPOSITORY_NAME`
-   - `TF_SUBNET_IDS_JSON`
-   - `TF_SECURITY_GROUP_IDS_JSON`
-   - `TF_STATE_BUCKET`
-   - `TF_STATE_KEY`
-3. trigger [deploy-dev.yml](/Users/efeon/commitscope/.github/workflows/deploy-dev.yml)
-4. generate a Step Functions input payload:
-
-```bash
-PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
-```
-
-5. start the state machine:
-
-```bash
-aws stepfunctions start-execution \
-  --region eu-west-2 \
-  --state-machine-arn "$(terraform -chdir=infrastructure/terraform/envs/dev output -raw state_machine_arn)" \
-  --input file://stepfunctions-input.json
-```
-
-6. verify:
-   - Step Functions execution succeeded
-   - Lambda logs exist
-   - ECS task reached `STOPPED`
-   - Parquet exists under `s3://commitscope-nick-dev/processed/`
-   - Athena can query `commitscope_dev.commit_summary`
-   - QuickSight can preview the Athena-backed datasets
+- manual execution: [manual_execution.md](/Users/efeon/commitscope/docs/manual_execution.md)
+- AWS deployment: [aws_deploy.md](/Users/efeon/commitscope/docs/aws_deploy.md)
+- metric contract: [metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md)
+- original project/product write-up: [PRD.md](/Users/efeon/commitscope/PRD.md)
