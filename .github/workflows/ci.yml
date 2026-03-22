@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -27,3 +27,61 @@ jobs:
         run: |
           . .venv/bin/activate
           PYTHONPATH=src python -m compileall src
+
+  terraform-plan:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      AWS_REGION: eu-west-2
+      TF_WORKDIR: infrastructure/terraform/envs/dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+
+      - uses: hashicorp/setup-terraform@v3.1.2
+
+      - name: Render terraform.tfvars for PR plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        env:
+          TF_BUCKET_NAME: ${{ vars.TF_BUCKET_NAME }}
+          TF_ATHENA_DATABASE: ${{ vars.TF_ATHENA_DATABASE }}
+          TF_ECR_REPOSITORY_NAME: ${{ vars.TF_ECR_REPOSITORY_NAME }}
+          TF_SUBNET_IDS_JSON: ${{ vars.TF_SUBNET_IDS_JSON }}
+          TF_SECURITY_GROUP_IDS_JSON: ${{ vars.TF_SECURITY_GROUP_IDS_JSON }}
+        run: |
+          : "${TF_BUCKET_NAME:=commitscope-nick-dev}"
+          : "${TF_ATHENA_DATABASE:=commitscope_dev}"
+          : "${TF_ECR_REPOSITORY_NAME:=commitscope-dev}"
+          : "${TF_SUBNET_IDS_JSON:?Set GitHub variable TF_SUBNET_IDS_JSON to a JSON array of subnet IDs}"
+          : "${TF_SECURITY_GROUP_IDS_JSON:?Set GitHub variable TF_SECURITY_GROUP_IDS_JSON to a JSON array of security group IDs}"
+          cat > terraform.tfvars.json <<EOF
+          {
+            "project": "commitscope",
+            "environment": "dev",
+            "aws_region": "${AWS_REGION}",
+            "bucket_name": "${TF_BUCKET_NAME}",
+            "athena_database": "${TF_ATHENA_DATABASE}",
+            "create_ecr_repository": true,
+            "ecr_repository_name": "${TF_ECR_REPOSITORY_NAME}",
+            "container_image_uri": null,
+            "subnet_ids": ${TF_SUBNET_IDS_JSON},
+            "security_group_ids": ${TF_SECURITY_GROUP_IDS_JSON},
+            "sample_config_path": "examples/config.dev.json"
+          }
+          EOF
+
+      - name: Terraform init for PR plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform init -backend=false
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform plan -input=false -lock=false -var-file=terraform.tfvars.json
