@@ -88,12 +88,14 @@ That script creates or updates:
   - `commitscope-dev-commit-summary`
   - `commitscope-dev-class-metrics`
   - `commitscope-dev-file-metrics`
+- the analysis `CommitScope Dev Overview`
+- the dashboard `CommitScope Dev Overview`
 
 After a successful Step Functions execution, the state machine starts the Glue
 crawler automatically. Because the QuickSight datasets use direct query against
 Athena, new data becomes queryable in QuickSight after the crawler refreshes
-the partitions. The remaining manual QuickSight step is arranging dashboard
-visuals in the QuickSight UI.
+the partitions. You can keep editing the generated analysis and dashboard in
+the QuickSight UI, but the baseline QuickSight assets now exist in AWS.
 
 ## AWS Deployment
 
