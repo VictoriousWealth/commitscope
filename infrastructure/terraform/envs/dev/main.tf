@@ -204,6 +204,81 @@ resource "aws_iam_role_policy" "glue_data_lake" {
   })
 }
 
+resource "aws_iam_role" "quicksight_athena_role" {
+  name = "${local.name_prefix}-quicksight-athena-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "quicksight.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "quicksight_athena_access" {
+  name = "${local.name_prefix}-quicksight-athena-access"
+  role = aws_iam_role.quicksight_athena_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "athena:GetDataCatalog",
+          "athena:GetDatabase",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:GetTableMetadata",
+          "athena:ListDataCatalogs",
+          "athena:ListDatabases",
+          "athena:ListTableMetadata",
+          "athena:ListWorkGroups",
+          "athena:StartQueryExecution",
+          "athena:StopQueryExecution"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:BatchGetPartition"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.data_lake.arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          "${aws_s3_bucket.data_lake.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
 resource "aws_glue_crawler" "processed" {
   name          = "${local.name_prefix}-crawler"
   database_name = aws_glue_catalog_database.commitscope.name
@@ -262,6 +337,13 @@ resource "aws_iam_role_policy" "step_functions_policy" {
         Resource = [
           aws_iam_role.ecs_task_execution_role[0].arn,
           aws_iam_role.ecs_task_role[0].arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["glue:StartCrawler", "glue:GetCrawler"]
+        Resource = [
+          "arn:aws:glue:${var.aws_region}:${data.aws_caller_identity.current.account_id}:crawler/${aws_glue_crawler.processed.name}"
         ]
       },
       {
@@ -456,7 +538,40 @@ resource "aws_sfn_state_machine" "pipeline" {
             "ContainerOverrides.$" = "$.prepared.container_overrides"
           }
         }
-        Next = "Complete"
+        Next = "StartCrawler"
+      }
+      StartCrawler = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:glue:startCrawler"
+        Parameters = {
+          Name = aws_glue_crawler.processed.name
+        }
+        Next = "WaitForCrawler"
+      }
+      WaitForCrawler = {
+        Type    = "Wait"
+        Seconds = 10
+        Next    = "GetCrawler"
+      }
+      GetCrawler = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:glue:getCrawler"
+        Parameters = {
+          Name = aws_glue_crawler.processed.name
+        }
+        ResultPath = "$.crawler"
+        Next       = "CrawlerReady?"
+      }
+      "CrawlerReady?" = {
+        Type = "Choice"
+        Choices = [
+          {
+            Variable     = "$.crawler.Crawler.State"
+            StringEquals = "READY"
+            Next         = "Complete"
+          }
+        ]
+        Default = "WaitForCrawler"
       }
       Complete = {
         Type = "Succeed"
