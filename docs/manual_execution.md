@@ -52,7 +52,13 @@ Wait for `deploy-dev.yml` to finish successfully before starting an execution.
 
 ## 2. Use This Step Functions Input Payload
 
-Use this payload unless you intentionally want to change the target repo:
+Use this payload unless you intentionally want to change the target repo. If you prefer to generate it from the example config instead of copy-pasting JSON, run:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
+```
+
+The payload should look like this:
 
 ```json
 {
@@ -193,20 +199,20 @@ aws s3api list-objects-v2 \
   --output table
 ```
 
-## 7. Refresh Glue
+## 7. Verify Glue
 
-Start the crawler:
+After a successful Step Functions run, the state machine starts the crawler automatically. Check its current state with:
 
 ```bash
-aws glue start-crawler \
+aws glue get-crawler \
   --region eu-west-2 \
   --name commitscope-dev-crawler
 ```
 
-Check crawler state:
+If you need to force a manual refresh, start the crawler:
 
 ```bash
-aws glue get-crawler \
+aws glue start-crawler \
   --region eu-west-2 \
   --name commitscope-dev-crawler
 ```
@@ -277,7 +283,7 @@ Current status in this AWS account:
 - dashboard `CommitScope Dev Overview` exists in `eu-west-2`
 - the state machine starts the Glue crawler automatically after the ECS task succeeds
 
-Provision or refresh the QuickSight data source and datasets with:
+Provision or refresh the QuickSight data source, datasets, analysis, and dashboard with:
 
 ```bash
 .venv/bin/python scripts/provision_quicksight.py
