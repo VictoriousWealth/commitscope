@@ -82,6 +82,30 @@ def test_javascript_metrics_are_generated_for_simple_class() -> None:
         assert any(row["language"] == "javascript" for row in result.method_metrics)
 
 
+def test_javascript_class_field_arrow_function_is_treated_as_method() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.js").write_text(
+            "class Sample {\n"
+            "  first = (value) => {\n"
+            "    if (value) {\n"
+            "      return helper();\n"
+            "    }\n"
+            "    return this.value;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        assert any(row["method_name"] == "sample.js.Sample.first" for row in result.method_metrics)
+
+
 def test_typescript_metrics_are_generated_for_simple_class() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
@@ -105,6 +129,32 @@ def test_typescript_metrics_are_generated_for_simple_class() -> None:
         )
         assert any(row["language"] == "typescript" for row in result.class_metrics)
         assert any(row["language"] == "typescript" for row in result.method_metrics)
+
+
+def test_typescript_public_field_arrow_function_is_treated_as_method() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.ts").write_text(
+            "class Sample {\n"
+            "  first = (value: number): number => {\n"
+            "    if (value > 0) {\n"
+            "      return helper();\n"
+            "    }\n"
+            "    return this.value;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "sample.ts.Sample.first")
+        assert method_row["parameters"] == 1
+        assert method_row["language"] == "typescript"
 
 
 def test_analysis_skips_invalid_python_but_keeps_other_file_metrics() -> None:
