@@ -8,6 +8,9 @@ from pathlib import Path
 
 import javalang
 from javalang.tokenizer import LexerError
+from tree_sitter import Language, Parser
+import tree_sitter_javascript
+import tree_sitter_typescript
 
 from commitscope.analysis.languages import language_for_file
 
@@ -21,7 +24,13 @@ class AnalysisResult:
 
 
 JAVA_LANGUAGE = "java"
-SUPPORTED_C_STYLE_LANGUAGES = {"javascript", "typescript"}
+JAVASCRIPT_LANGUAGE = "javascript"
+TYPESCRIPT_LANGUAGE = "typescript"
+SUPPORTED_C_STYLE_LANGUAGES = {JAVASCRIPT_LANGUAGE, TYPESCRIPT_LANGUAGE}
+TREE_SITTER_LANGUAGES = {
+    JAVASCRIPT_LANGUAGE: Language(tree_sitter_javascript.language()),
+    TYPESCRIPT_LANGUAGE: Language(tree_sitter_typescript.language_typescript()),
+}
 
 
 class PythonAnalyzer(ast.NodeVisitor):
@@ -398,6 +407,228 @@ class JavaAnalyzer:
         return offsets
 
 
+class JsTsAnalyzer:
+    def __init__(self, language: str, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.language = language
+        self.relative_path = relative_path
+        self.source = source
+        self.source_bytes = source.encode("utf-8")
+        self.known_class_names = known_class_names
+        self.parser = Parser(TREE_SITTER_LANGUAGES[language])
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        tree = self.parser.parse(self.source_bytes)
+        root = tree.root_node
+        if root.has_error:
+            return [], []
+
+        classes: list[TextClass] = []
+        for class_node in _iter_nodes(root, "class_declaration"):
+            name_node = class_node.child_by_field_name("name")
+            body_node = class_node.child_by_field_name("body")
+            if name_node is None or body_node is None:
+                continue
+            class_name = self._text(name_node)
+            qualified = f"{self.relative_path}.{class_name}"
+            methods: list[TextMethod] = []
+            for child in body_node.named_children:
+                if child.type == "method_definition":
+                    method = self._build_method(qualified, child)
+                elif child.type in {"field_definition", "public_field_definition"}:
+                    method = self._build_field_arrow_method(qualified, child)
+                else:
+                    method = None
+                if method is not None:
+                    methods.append(method)
+            classes.append(TextClass(class_name=qualified, language=self.language, methods=methods))
+        return self._rows_from_classes(classes)
+
+    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
+        method_callers: dict[str, set[str]] = defaultdict(set)
+        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+        method_index = {
+            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
+            for text_class in classes
+            for method in text_class.methods
+        }
+
+        for text_class in classes:
+            for method in text_class.methods:
+                caller = method.method_name
+                for target in method.direct_calls:
+                    for candidate in method_index.get(target, []):
+                        if candidate.method_name != caller:
+                            method_callers[candidate.method_name].add(caller)
+                            class_fanin_sources[candidate.class_name].add(method.class_name)
+
+        class_rows: list[dict] = []
+        method_rows: list[dict] = []
+        for text_class in classes:
+            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
+            class_rows.append(
+                {
+                    "class_name": text_class.class_name,
+                    "wmc": sum(method.cc for method in text_class.methods),
+                    "lcom": self._compute_lcom(lcom_sources),
+                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
+                    "fanout": sum(method.fanout for method in text_class.methods),
+                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
+                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
+                    "language": text_class.language,
+                }
+            )
+            for method in text_class.methods:
+                method_rows.append(
+                    {
+                        "class_name": text_class.class_name,
+                        "method_name": method.method_name,
+                        "cc": method.cc,
+                        "loc": method.loc,
+                        "lloc": method.lloc,
+                        "parameters": method.parameters,
+                        "fanin": len(method_callers.get(method.method_name, set())),
+                        "fanout": method.fanout,
+                        "language": method.language,
+                    }
+                )
+        return class_rows, method_rows
+
+    def _build_method(self, qualified_class_name: str, method_node) -> TextMethod | None:
+        name_node = method_node.child_by_field_name("name")
+        params_node = method_node.child_by_field_name("parameters")
+        body_node = method_node.child_by_field_name("body")
+        if name_node is None or params_node is None or body_node is None:
+            return None
+        method_simple_name = self._text(name_node)
+        snippet = self._text(method_node)
+        body_text = self._text(body_node)
+        lines = [line for line in body_text.splitlines() if line.strip()]
+        call_nodes = [node for node in _iter_nodes(body_node, "call_expression")]
+        direct_calls = set()
+        for call_node in call_nodes:
+            function_node = call_node.child_by_field_name("function")
+            if function_node is None:
+                continue
+            if function_node.type in {"identifier", "property_identifier"}:
+                direct_calls.add(self._text(function_node))
+            elif function_node.type == "member_expression":
+                property_node = function_node.child_by_field_name("property")
+                if property_node is not None:
+                    direct_calls.add(self._text(property_node))
+        class_refs = {
+            f"{self.relative_path}.{self._text(node)}"
+            for node in _iter_nodes(body_node, "identifier")
+            if self._text(node) in self.known_class_names
+        }
+        return TextMethod(
+            class_name=qualified_class_name,
+            method_name=f"{qualified_class_name}.{method_simple_name}",
+            method_simple_name=method_simple_name,
+            language=self.language,
+            body=snippet,
+            loc=snippet.count("\n") + 1 if snippet else 1,
+            lloc=len(lines) or 1,
+            parameters=self._parameter_count(params_node),
+            fanout=len(call_nodes),
+            cc=self._complexity(body_node, body_text),
+            instance_vars={
+                self._text(property_node)
+                for node in _iter_nodes(body_node, "member_expression")
+                if (object_node := node.child_by_field_name("object")) is not None
+                and object_node.type == "this"
+                and (property_node := node.child_by_field_name("property")) is not None
+            },
+            direct_calls=direct_calls,
+            class_refs=class_refs,
+        )
+
+    def _build_field_arrow_method(self, qualified_class_name: str, field_node) -> TextMethod | None:
+        name_node = field_node.child_by_field_name("property") or field_node.child_by_field_name("name")
+        value_node = field_node.child_by_field_name("value")
+        if name_node is None or value_node is None or value_node.type != "arrow_function":
+            return None
+        params_node = value_node.child_by_field_name("parameters")
+        body_node = value_node.child_by_field_name("body")
+        if params_node is None or body_node is None:
+            return None
+        method_simple_name = self._text(name_node)
+        snippet = self._text(field_node)
+        body_text = self._text(body_node)
+        lines = [line for line in body_text.splitlines() if line.strip()]
+        call_nodes = [node for node in _iter_nodes(body_node, "call_expression")]
+        direct_calls = set()
+        for call_node in call_nodes:
+            function_node = call_node.child_by_field_name("function")
+            if function_node is None:
+                continue
+            if function_node.type in {"identifier", "property_identifier"}:
+                direct_calls.add(self._text(function_node))
+            elif function_node.type == "member_expression":
+                property_node = function_node.child_by_field_name("property")
+                if property_node is not None:
+                    direct_calls.add(self._text(property_node))
+        class_refs = {
+            f"{self.relative_path}.{self._text(node)}"
+            for node in _iter_nodes(body_node, "identifier")
+            if self._text(node) in self.known_class_names
+        }
+        return TextMethod(
+            class_name=qualified_class_name,
+            method_name=f"{qualified_class_name}.{method_simple_name}",
+            method_simple_name=method_simple_name,
+            language=self.language,
+            body=snippet,
+            loc=snippet.count("\n") + 1 if snippet else 1,
+            lloc=len(lines) or 1,
+            parameters=self._parameter_count(params_node),
+            fanout=len(call_nodes),
+            cc=self._complexity(body_node, body_text),
+            instance_vars={
+                self._text(property_node)
+                for node in _iter_nodes(body_node, "member_expression")
+                if (object_node := node.child_by_field_name("object")) is not None
+                and object_node.type == "this"
+                and (property_node := node.child_by_field_name("property")) is not None
+            },
+            direct_calls=direct_calls,
+            class_refs=class_refs,
+        )
+
+    def _parameter_count(self, params_node) -> int:
+        if self.language == TYPESCRIPT_LANGUAGE:
+            return sum(1 for child in params_node.named_children if child.type in {"required_parameter", "optional_parameter", "rest_pattern"})
+        return sum(1 for child in params_node.named_children if child.type == "identifier")
+
+    def _complexity(self, body_node, body_text: str) -> int:
+        branch_nodes = {
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_case",
+            "ternary_expression",
+            "catch_clause",
+        }
+        cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in branch_nodes)
+        cc += len(re.findall(r"&&|\|\|", body_text))
+        return cc
+
+    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
+        methods = list(method_access)
+        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
+        p = 0
+        q = 0
+        for left, right in pairs:
+            if method_access[left] & method_access[right]:
+                q += 1
+            else:
+                p += 1
+        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
+
+    def _text(self, node) -> str:
+        return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+
+
 class CStyleAnalyzer:
     def __init__(self, language: str, relative_path: str, source: str, known_class_names: set[str]) -> None:
         self.language = language
@@ -579,6 +810,8 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
         analyzer = (
             JavaAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
             if language == JAVA_LANGUAGE
+            else JsTsAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language in SUPPORTED_C_STYLE_LANGUAGES
             else CStyleAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
         )
         module_classes, module_methods = analyzer.analyze()
@@ -679,3 +912,12 @@ def _parameter_count_from_text(params: str) -> int:
 def _complexity_from_text(body: str) -> int:
     branch_tokens = len(re.findall(r"\b(if|for|while|case|catch|switch|else\s+if)\b|&&|\|\|", body))
     return branch_tokens + 1 if body.strip() else 0
+
+
+def _iter_nodes(node, node_type: str | None = None):
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if node_type is None or current.type == node_type:
+            yield current
+        stack.extend(reversed(current.named_children))
