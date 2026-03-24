@@ -2,30 +2,53 @@
 
 CommitScope preserves the notebook-style metrics as explicit approximations rather than claiming language-agnostic precision.
 
-## Python Class And Method Metrics
+## AST-Backed Languages
 
-These metrics are derived from the heuristics in [staticAnalysis.ipynb](/Users/efeon/week4-static-analysis-ug_13/staticAnalysis.ipynb).
+CommitScope now performs structural parsing for these languages:
 
-- `CC`: cyclomatic complexity approximation. Starts at `1` and increments for `if`, `for`, `while`, and `except` branches discovered in the Python AST.
-- `LOC`: method lines of code derived from `end_lineno - lineno + 1`.
+- Python: built-in `ast`
+- Java: `javalang`
+- JavaScript: `tree-sitter`
+- TypeScript: `tree-sitter`
+
+These analyzers extract classes, methods, constructors, and method bodies from syntax trees rather than from regex-only text scans. The metrics still follow notebook-style intent, but they are not full compiler or type-checker implementations.
+
+## Class And Method Metrics
+
+- `CC`: cyclomatic complexity approximation. Starts at `1` and increments for branch and control-flow nodes discovered in the language parser.
+- `LOC`: method lines of code derived from structural source ranges where available.
 - `WMC`: weighted methods per class, implemented as the sum of method `CC` values for the class.
-- `LCOM`: cohesion approximation based on whether method pairs share `self.<attr>` accesses.
+- `LCOM`: cohesion approximation based on whether method pairs share instance-field access patterns.
 - `FANIN`: static approximation of how many analysed classes or methods call into the target.
-- `FANOUT`: static approximation of outgoing calls observed in the AST or lightweight token scan.
-- `CBO`: coupling approximation based on references to other known classes.
+- `FANOUT`: static approximation of outgoing calls observed in the parsed method body.
+- `CBO`: coupling approximation based on references to other known classes or types.
 - `RFC`: response-for-class approximation based on public methods plus directly called methods.
-- `parameters`: count of declared method parameters excluding `self`.
+- `parameters`: count of declared method parameters, excluding implicit receiver parameters where relevant.
 
-## Non-Python Files
+## Precision Notes
 
-For Java, JavaScript, TypeScript, HTML, CSS, and other mainstream text-based languages, CommitScope currently produces:
+AST-backed parsing improves robustness for unusual formatting, annotations, generics, decorators, constructors, and class-field arrow functions. It does not mean the project performs full semantic resolution.
+
+These metrics remain approximations:
+
+- `FANIN`
+- `FANOUT`
+- `LCOM`
+- `CBO`
+- `RFC`
+
+They are intended for hotspot detection and trend analysis, not for compiler-grade proof of architectural dependency structure.
+
+## Other Languages
+
+For HTML, CSS, and other mainstream text-based languages outside the AST-backed set above, CommitScope currently produces:
 
 - language-aware file counts
 - LOC
 - churn-ready file metadata
 - heuristic branch and call signals via token scans
 
-These results are intentionally lighter than the Python AST metrics. The pipeline still includes them in commit summaries, file-level datasets, and cross-language reporting so the repository is not reduced to Python-only coverage.
+These results are intentionally lighter than the class and method metrics. The pipeline still includes them in commit summaries, file-level datasets, and cross-language reporting so the repository is not reduced to only the fully parsed languages.
 
 ## Reporting Guidance
 
