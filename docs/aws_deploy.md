@@ -98,15 +98,16 @@ The cloud path is:
    - `raw/`
    - `processed/`
    - `curated/`
-5. Athena queries the Parquet written under `processed/`
-6. QuickSight uses Athena-backed datasets described in the generated curated artifacts
+5. the state machine starts the Glue crawler so partitions refresh after a successful run
+6. Athena queries the Parquet written under `processed/`
+7. QuickSight uses Athena-backed direct-query datasets and dashboards provisioned from the repo helper
 
 ## 6. Start A Cloud Run
 
 First generate the Step Functions payload:
 
 ```bash
-PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
+PYTHONPATH=src .venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
 ```
 
 Then start the execution:
@@ -163,14 +164,17 @@ aws athena start-query-execution \
   --result-configuration OutputLocation="s3://$(terraform -chdir=infrastructure/terraform/envs/dev output -raw data_lake_bucket)/curated/athena-results/"
 ```
 
-Confirm QuickSight can use the generated datasets:
+Confirm QuickSight assets are provisioned and can query Athena:
 
-1. open [quicksight_datasets.json](/Users/efeon/commitscope/outputs/generated/curated/quicksight_datasets.json)
-2. create Athena datasets in QuickSight for:
-   - `commitscope_dev.commit_summary`
-   - `commitscope_dev.class_metrics`
-   - `commitscope_dev.file_metrics`
-3. verify QuickSight can preview rows from each dataset
+```bash
+.venv/bin/python scripts/provision_quicksight.py
+```
+
+Then verify in the QuickSight UI that:
+
+1. the Athena data source exists
+2. the datasets preview rows from Athena
+3. the `CommitScope Dev Overview` analysis and dashboard load successfully
 
 ## Notes
 
@@ -178,3 +182,4 @@ Confirm QuickSight can use the generated datasets:
 - apply the generated DDL from [glue_ddl.sql](/Users/efeon/commitscope/outputs/generated/curated/glue_ddl.sql) if the crawler has not yet registered the tables as expected
 - Lambda is intentionally a prepare step only
 - ECS Fargate is the heavy-analysis runtime
+- QuickSight provisioning is scripted; the generated curated JSON remains useful as an evidence artifact and as a reference asset definition
