@@ -6,6 +6,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+import javalang
+from javalang.tokenizer import LexerError
+
 from commitscope.analysis.languages import language_for_file
 
 
@@ -17,7 +20,8 @@ class AnalysisResult:
     commit_summary: dict
 
 
-SUPPORTED_C_STYLE_LANGUAGES = {"java", "javascript", "typescript"}
+JAVA_LANGUAGE = "java"
+SUPPORTED_C_STYLE_LANGUAGES = {"javascript", "typescript"}
 
 
 class PythonAnalyzer(ast.NodeVisitor):
@@ -221,6 +225,7 @@ class TextMethod:
     class_name: str
     method_name: str
     method_simple_name: str
+    language: str
     body: str
     loc: int
     lloc: int
@@ -237,6 +242,160 @@ class TextClass:
     class_name: str
     language: str
     methods: list[TextMethod]
+
+
+class JavaAnalyzer:
+    def __init__(self, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.relative_path = relative_path
+        self.source = source
+        self.known_class_names = known_class_names
+        self._line_offsets = self._build_line_offsets(source)
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        try:
+            tree = javalang.parse.parse(self.source)
+        except (javalang.parser.JavaSyntaxError, IndexError, TypeError, StopIteration, LexerError):
+            return [], []
+
+        classes: list[TextClass] = []
+        for _, node in tree.filter(javalang.tree.ClassDeclaration):
+            qualified = f"{self.relative_path}.{node.name}"
+            methods: list[TextMethod] = []
+            for method in list(node.methods) + list(node.constructors):
+                methods.append(self._build_method(node.name, qualified, method))
+            classes.append(TextClass(class_name=qualified, language=JAVA_LANGUAGE, methods=methods))
+        return self._rows_from_classes(classes)
+
+    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
+        method_callers: dict[str, set[str]] = defaultdict(set)
+        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+        method_index = {
+            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
+            for text_class in classes
+            for method in text_class.methods
+        }
+
+        for text_class in classes:
+            for method in text_class.methods:
+                caller = method.method_name
+                for target in method.direct_calls:
+                    for candidate in method_index.get(target, []):
+                        if candidate.method_name != caller:
+                            method_callers[candidate.method_name].add(caller)
+                            class_fanin_sources[candidate.class_name].add(method.class_name)
+
+        class_rows: list[dict] = []
+        method_rows: list[dict] = []
+        for text_class in classes:
+            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
+            class_rows.append(
+                {
+                    "class_name": text_class.class_name,
+                    "wmc": sum(method.cc for method in text_class.methods),
+                    "lcom": self._compute_lcom(lcom_sources),
+                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
+                    "fanout": sum(method.fanout for method in text_class.methods),
+                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
+                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
+                    "language": text_class.language,
+                }
+            )
+            for method in text_class.methods:
+                method_rows.append(
+                    {
+                        "class_name": text_class.class_name,
+                        "method_name": method.method_name,
+                        "cc": method.cc,
+                        "loc": method.loc,
+                        "lloc": method.lloc,
+                        "parameters": method.parameters,
+                        "fanin": len(method_callers.get(method.method_name, set())),
+                        "fanout": method.fanout,
+                        "language": method.language,
+                    }
+                )
+        return class_rows, method_rows
+
+    def _build_method(
+        self,
+        class_name: str,
+        qualified_class_name: str,
+        method: javalang.tree.MethodDeclaration | javalang.tree.ConstructorDeclaration,
+    ) -> TextMethod:
+        method_simple_name = method.name
+        snippet = self._node_snippet(method)
+        loc = snippet.count("\n") + 1 if snippet else max(len(method.body or []) + 1, 1)
+        lines = [line for line in snippet.splitlines() if line.strip()]
+        invocations = [node for _, node in method if isinstance(node, javalang.tree.MethodInvocation)]
+        references = [node for _, node in method if isinstance(node, javalang.tree.ReferenceType)]
+        cc = 1 + sum(
+            1
+            for _, node in method
+            if isinstance(
+                node,
+                (
+                    javalang.tree.IfStatement,
+                    javalang.tree.ForStatement,
+                    javalang.tree.WhileStatement,
+                    javalang.tree.DoStatement,
+                    javalang.tree.SwitchStatementCase,
+                    javalang.tree.CatchClause,
+                    javalang.tree.TernaryExpression,
+                ),
+            )
+        )
+        cc += len(re.findall(r"&&|\|\|", snippet))
+        return TextMethod(
+            class_name=qualified_class_name,
+            method_name=f"{qualified_class_name}.{method_simple_name}",
+            method_simple_name=method_simple_name,
+            language=JAVA_LANGUAGE,
+            body=snippet,
+            loc=loc,
+            lloc=len(lines) or 1,
+            parameters=len(method.parameters),
+            fanout=len(invocations),
+            cc=cc,
+            instance_vars=set(re.findall(r"\bthis\.([A-Za-z_]\w*)", snippet)),
+            direct_calls={node.member for node in invocations if node.member},
+            class_refs={
+                f"{self.relative_path}.{node.name}"
+                for node in references
+                if getattr(node, "name", None) in self.known_class_names
+            },
+        )
+
+    def _node_snippet(self, method: javalang.tree.MethodDeclaration | javalang.tree.ConstructorDeclaration) -> str:
+        if method.position is None:
+            return ""
+        line_start_index = self._line_offsets[method.position.line - 1]
+        open_brace = self.source.find("{", line_start_index)
+        if open_brace == -1:
+            return ""
+        close_brace = _find_matching_brace(self.source, open_brace)
+        if close_brace == -1:
+            return ""
+        return self.source[line_start_index : close_brace + 1]
+
+    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
+        methods = list(method_access)
+        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
+        p = 0
+        q = 0
+        for left, right in pairs:
+            if method_access[left] & method_access[right]:
+                q += 1
+            else:
+                p += 1
+        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
+
+    def _build_line_offsets(self, source: str) -> list[int]:
+        offsets = [0]
+        running = 0
+        for line in source.splitlines(keepends=True):
+            running += len(line)
+            offsets.append(running)
+        return offsets
 
 
 class CStyleAnalyzer:
@@ -339,6 +498,7 @@ class CStyleAnalyzer:
                     class_name=qualified_class_name,
                     method_name=f"{qualified_class_name}.{method_simple_name}",
                     method_simple_name=method_simple_name,
+                    language=self.language,
                     body=body,
                     loc=loc,
                     lloc=len(meaningful_lines) or 1,
@@ -389,6 +549,14 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef):
                     known_classes[node.name].append(f"{relative}.{node.name}")
+        elif language == JAVA_LANGUAGE:
+            try:
+                source = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            text_sources[relative] = (language, source)
+            for class_name in re.findall(r"\bclass\s+([A-Za-z_]\w*)", source):
+                known_text_class_names.add(class_name)
         elif language in SUPPORTED_C_STYLE_LANGUAGES:
             try:
                 source = path.read_text(encoding="utf-8", errors="ignore")
@@ -408,12 +576,16 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
         class_rows.extend(_annotate_rows(module_classes, repo_name, branch, commit_hash, commit_date))
         method_rows.extend(_annotate_rows(module_methods, repo_name, branch, commit_hash, commit_date))
     for relative, (language, source) in text_sources.items():
-        analyzer = CStyleAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+        analyzer = (
+            JavaAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language == JAVA_LANGUAGE
+            else CStyleAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+        )
         module_classes, module_methods = analyzer.analyze()
         class_rows.extend(_annotate_rows(module_classes, repo_name, branch, commit_hash, commit_date))
         method_rows.extend(_annotate_rows(module_methods, repo_name, branch, commit_hash, commit_date))
 
-    analyzed_method_languages = {"python", *SUPPORTED_C_STYLE_LANGUAGES}
+    analyzed_method_languages = {"python", JAVA_LANGUAGE, *SUPPORTED_C_STYLE_LANGUAGES}
 
     summary = {
         "repo": repo_name,
