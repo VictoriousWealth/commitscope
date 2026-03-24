@@ -11,6 +11,7 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 - Glue catalogs the generated datasets
 - Athena queries the processed metrics
 - QuickSight dashboards read the Athena-backed datasets directly
+- the automated local test suite currently passes with `41` tests
 
 ## Architecture
 
@@ -62,10 +63,18 @@ Metric semantics and approximations are documented in [metric_contract.md](/User
 ## Language Support
 
 - Python: AST-backed class and method analysis
-- Java: heuristic class and method analysis
-- JavaScript: heuristic class and method analysis
-- TypeScript: heuristic class and method analysis
+- Java: AST-backed class and method analysis via `javalang`
+- JavaScript: AST-backed class and method analysis via `tree-sitter`
+- TypeScript: AST-backed class and method analysis via `tree-sitter`
 - other languages: file-level summaries where supported by the language mapper
+
+## Testing
+
+Run the full local suite with:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m pytest -q
+```
 
 ## Implementation Evidence
 
