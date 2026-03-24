@@ -157,6 +157,37 @@ def test_java_constructor_and_method_are_extracted() -> None:
         assert result.commit_summary["total_methods"] == 2
 
 
+def test_java_analysis_handles_annotations_and_generics() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "Service.java").write_text(
+            "import java.util.List;\n"
+            "public class Service {\n"
+            "    @Deprecated\n"
+            "    public List<String> names(List<String> input) {\n"
+            "        if (input == null || input.isEmpty()) {\n"
+            "            return List.of();\n"
+            "        }\n"
+            "        return input;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        assert any(row["class_name"] == "Service.java.Service" for row in result.class_metrics)
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "Service.java.Service.names")
+        assert method_row["parameters"] == 1
+        assert method_row["cc"] >= 3
+
+
 def test_total_loc_does_not_double_count_python_or_c_style_methods() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
