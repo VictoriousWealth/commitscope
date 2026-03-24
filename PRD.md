@@ -1,6 +1,6 @@
 # CommitScope
 
-CommitScope is an AWS-first analytics pipeline that turns Git history into queryable code-health datasets. The MVP clones a public GitHub repository, walks a configurable commit range, computes notebook-aligned static-analysis heuristics, writes JSON/CSV/Parquet outputs locally and to S3, and prepares Athena-backed datasets for QuickSight.
+CommitScope is an AWS-first analytics pipeline that turns Git history into queryable code-health datasets. The MVP clones a public GitHub repository, walks a configurable commit range, computes notebook-aligned static-analysis metrics, writes JSON/CSV/Parquet outputs locally and to S3, and prepares Athena-backed datasets for QuickSight.
 
 ## MVP Scope
 
@@ -18,7 +18,7 @@ CommitScope is an AWS-first analytics pipeline that turns Git history into query
 ## Local Setup
 
 ```bash
-python3 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -61,7 +61,17 @@ examples/                Example config
 
 ## Metric Notes
 
-The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python class and method metrics use static AST heuristics. Non-Python files are included in cross-language file summaries and commit-level aggregates using lightweight textual heuristics rather than full semantic parsers.
+The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python, Java, JavaScript, and TypeScript all use AST-backed structural analysis. Higher-level metrics such as `FANIN`, `FANOUT`, `CBO`, `RFC`, and `LCOM` still remain static approximations rather than full compiler-grade semantic resolution.
+
+## Test Status
+
+The current suite covers the pipeline, handlers, storage, reporting, DDL generation, QuickSight asset generation, repository helpers, CLI behavior, and representative parser edge cases.
+
+Run it locally with:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m pytest -q
+```
 
 ## Athena DDL
 
@@ -119,7 +129,7 @@ Minimal cloud run sequence:
 4. generate a Step Functions input payload:
 
 ```bash
-PYTHONPATH=src python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
+PYTHONPATH=src .venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
 ```
 
 5. start the state machine:
@@ -137,4 +147,4 @@ aws stepfunctions start-execution \
    - ECS task reached `STOPPED`
    - Parquet exists under `s3://commitscope-nick-dev/processed/`
    - Athena can query `commitscope_dev.commit_summary`
-   - QuickSight can preview the Athena-backed datasets
+   - QuickSight assets are provisioned and query the Athena-backed datasets
