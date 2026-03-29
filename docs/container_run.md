@@ -16,4 +16,4 @@ docker run --rm -e COMMITSCOPE_CONFIG=/app/examples/config.dev.json commitscope:
 - task command should run the same pipeline entrypoint used locally
 - Step Functions should invoke the Fargate task synchronously for heavy analysis
 - S3 and Glue/Athena remain the storage and query layers
-- Python, Java, JavaScript, and TypeScript analysis should match the AST-backed local code path
+- Python, Java, JavaScript, TypeScript, Go, Rust, and C# analysis should match the parser-backed local code path
