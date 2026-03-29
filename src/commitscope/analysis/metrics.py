@@ -31,6 +31,7 @@ class AnalysisResult:
 class PythonModuleInfo:
     imported_modules: dict[str, str]
     imported_classes: dict[str, str]
+    function_return_types: dict[str, str]
 
 
 @dataclass(slots=True)
@@ -40,6 +41,7 @@ class PythonClassInfo:
     class_name: str
     methods: set[str]
     base_classes: set[str]
+    method_return_types: dict[str, str]
 
 
 @dataclass(slots=True)
@@ -156,7 +158,7 @@ class PythonAnalyzer:
         class_self_attr_types: dict[str, str],
     ) -> tuple[dict, set[str], set[str], set[str]]:
         method_name = f"{class_info.qualified_name}.{node.name}"
-        local_var_types: dict[str, str] = {}
+        local_var_types = self._parameter_type_bindings(node, class_info)
         self_attr_types = dict(class_self_attr_types)
         resolved_methods: set[str] = set()
         resolved_classes: set[str] = set(class_info.base_classes)
@@ -241,18 +243,23 @@ class PythonAnalyzer:
     ) -> tuple[str | None, str | None]:
         if isinstance(node.func, ast.Name):
             name = node.func.id
-            if name in class_info.methods:
-                return f"{class_info.qualified_name}.{name}", None
+            resolved_method = self._resolve_python_method_for_class(class_info.qualified_name, name)
+            if resolved_method:
+                return resolved_method, resolved_method.rsplit(".", maxsplit=1)[0]
             resolved_class = self._resolve_python_class_name(name, class_info)
             if resolved_class:
                 return None, resolved_class
+            module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}, {}))
+            function_return = module_info.function_return_types.get(name)
+            if function_return:
+                return None, function_return
             return None, None
         if isinstance(node.func, ast.Attribute):
             owner_class = self._resolve_python_value_type(node.func.value, class_info, local_var_types, self_attr_types)
             if owner_class:
-                owner_info = self.project_index.class_infos.get(owner_class)
-                if owner_info and node.func.attr in owner_info.methods:
-                    return f"{owner_class}.{node.func.attr}", owner_class
+                resolved_method = self._resolve_python_method_for_class(owner_class, node.func.attr)
+                if resolved_method:
+                    return resolved_method, resolved_method.rsplit(".", maxsplit=1)[0]
                 return None, owner_class
             resolved_class = self._resolve_python_attribute_class(node.func.value, node.func.attr, class_info)
             if resolved_class:
@@ -267,18 +274,28 @@ class PythonAnalyzer:
         self_attr_types: dict[str, str],
     ) -> str | None:
         if isinstance(node, ast.Name):
+            if node.id == "self":
+                return class_info.qualified_name
             if node.id in local_var_types:
                 return local_var_types[node.id]
             return None
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
             return self_attr_types.get(node.attr)
         if isinstance(node, ast.Call):
-            _, target_class = self._resolve_python_call(node, class_info, local_var_types, self_attr_types)
+            target_method, target_class = self._resolve_python_call(node, class_info, local_var_types, self_attr_types)
+            if target_method:
+                method_owner = target_method.rsplit(".", maxsplit=1)[0]
+                method_simple_name = target_method.rsplit(".", maxsplit=1)[-1]
+                owner_info = self.project_index.class_infos.get(method_owner)
+                if owner_info and method_simple_name in owner_info.method_return_types:
+                    return owner_info.method_return_types[method_simple_name]
             return target_class
+        if isinstance(node, ast.Subscript):
+            return self._infer_python_expr_type(node.value, class_info, local_var_types, self_attr_types)
         return None
 
     def _resolve_python_class_name(self, name: str, class_info: PythonClassInfo) -> str | None:
-        module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}))
+        module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}, {}))
         if name in module_info.imported_classes:
             return module_info.imported_classes[name]
         module_class = self.project_index.classes_by_module.get(class_info.module_name, {}).get(name)
@@ -291,7 +308,7 @@ class PythonAnalyzer:
 
     def _resolve_python_attribute_class(self, value: ast.AST, attr: str, class_info: PythonClassInfo) -> str | None:
         if isinstance(value, ast.Name):
-            module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}))
+            module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}, {}))
             imported_module = module_info.imported_modules.get(value.id)
             if imported_module:
                 return self.project_index.classes_by_module.get(imported_module, {}).get(attr)
@@ -357,6 +374,39 @@ class PythonAnalyzer:
             if isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name) and child.value.id == "self":
                 instance_vars.add(child.attr)
         return instance_vars
+
+    def _parameter_type_bindings(self, node: ast.FunctionDef | ast.AsyncFunctionDef, class_info: PythonClassInfo) -> dict[str, str]:
+        bindings: dict[str, str] = {}
+        module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}, {}))
+        for parameter in [*node.args.args, *node.args.kwonlyargs]:
+            if parameter.arg == "self":
+                continue
+            resolved = _resolve_python_class_expression(
+                parameter.annotation,
+                class_info.module_name,
+                module_info,
+                self.project_index.classes_by_module,
+                self.project_index.classes_by_simple,
+            )
+            if resolved:
+                bindings[parameter.arg] = resolved
+        return bindings
+
+    def _resolve_python_method_for_class(self, class_name: str, method_name: str) -> str | None:
+        visited: set[str] = set()
+        stack = [class_name]
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            info = self.project_index.class_infos.get(current)
+            if info is None:
+                continue
+            if method_name in info.methods:
+                return f"{current}.{method_name}"
+            stack.extend(info.base_classes)
+        return None
 
 
 @dataclass(slots=True)
@@ -1130,6 +1180,7 @@ def _build_python_project_index(python_trees: dict[str, ast.AST]) -> PythonProje
                 class_name=node.name,
                 methods=methods,
                 base_classes=set(),
+                method_return_types={},
             )
             classes_by_simple[node.name].append(qualified_name)
             classes_by_module[module_name][node.name] = qualified_name
@@ -1138,6 +1189,7 @@ def _build_python_project_index(python_trees: dict[str, ast.AST]) -> PythonProje
     for module_name, tree in python_trees.items():
         imported_modules: dict[str, str] = {}
         imported_classes: dict[str, str] = {}
+        function_return_types: dict[str, str] = {}
         for node in tree.body if isinstance(tree, ast.Module) else []:
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -1159,17 +1211,42 @@ def _build_python_project_index(python_trees: dict[str, ast.AST]) -> PythonProje
                     submodule = import_to_relative.get(submodule_import)
                     if submodule:
                         imported_modules[alias.asname or alias.name] = submodule
-        module_infos[module_name] = PythonModuleInfo(imported_modules=imported_modules, imported_classes=imported_classes)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return_type = _resolve_python_class_expression(
+                    node.returns,
+                    module_name,
+                    PythonModuleInfo(imported_modules=imported_modules, imported_classes=imported_classes, function_return_types={}),
+                    classes_by_module,
+                    classes_by_simple,
+                )
+                if return_type:
+                    function_return_types[node.name] = return_type
+        module_infos[module_name] = PythonModuleInfo(
+            imported_modules=imported_modules,
+            imported_classes=imported_classes,
+            function_return_types=function_return_types,
+        )
 
     for class_info in class_infos.values():
         class_node = _find_python_class_node(python_trees[class_info.module_name], class_info.class_name)
         if class_node is None:
             continue
-        module_info = module_infos.get(class_info.module_name, PythonModuleInfo({}, {}))
+        module_info = module_infos.get(class_info.module_name, PythonModuleInfo({}, {}, {}))
         for base in class_node.bases:
             resolved = _resolve_python_class_expression(base, class_info.module_name, module_info, classes_by_module, classes_by_simple)
             if resolved:
                 class_info.base_classes.add(resolved)
+        for item in class_node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                resolved_return = _resolve_python_class_expression(
+                    item.returns,
+                    class_info.module_name,
+                    module_info,
+                    classes_by_module,
+                    classes_by_simple,
+                )
+                if resolved_return:
+                    class_info.method_return_types[item.name] = resolved_return
 
     return PythonProjectIndex(
         module_infos=module_infos,
