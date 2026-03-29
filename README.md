@@ -11,7 +11,7 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 - Glue catalogs the generated datasets
 - Athena queries the processed metrics
 - QuickSight dashboards read the Athena-backed datasets directly
-- the automated local test suite currently passes with `41` tests
+- the automated local test suite currently passes with `45` tests
 
 ## Architecture
 
@@ -21,27 +21,27 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 
 ### Deployment
 
-![GitHub Actions deploy success](docs/github-actions-deploy-success-preview-screenshot.png)
-![GitHub Actions deploy details](docs/github-actions-deploy-success-detailed-screenshot.png)
+![GitHub Actions deploy success](docs/screenshots/github-actions-deploy-success-preview-screenshot.png)
+![GitHub Actions deploy details](docs/screenshots/github-actions-deploy-success-detailed-screenshot.png)
 
 ### Workflow Execution
 
-![Step Functions execution success](docs/step-functions-execution-success.png)
-![Step Functions state graph](docs/aws-state-machine-pipeline-graph.png)
-![ECS task exit code 0](docs/ecs-task-exit-code-0-screenshot.png)
+![Step Functions execution success](docs/screenshots/step-functions-execution-success.png)
+![Step Functions state graph](docs/screenshots/aws-state-machine-pipeline-graph.png)
+![ECS task exit code 0](docs/screenshots/ecs-task-exit-code-0-screenshot.png)
 
 ### Data Outputs
 
-![S3 output prefixes](docs/s3-outputs-bucket-viewing-screenshot.png)
-![S3 curated outputs](docs/s3-outputs-bucket-viewing-curated-folder-screenshot.png)
-![Glue crawler successful runs](docs/glue-crawler-list-of-succssful-runs-screenshot.png)
-![Athena query results](docs/athena-query-results-screenshot.png)
+![S3 output prefixes](docs/screenshots/s3-outputs-bucket-viewing-screenshot.png)
+![S3 curated outputs](docs/screenshots/s3-outputs-bucket-viewing-curated-folder-screenshot.png)
+![Glue crawler successful runs](docs/screenshots/glue-crawler-list-of-succssful-runs-screenshot.png)
+![Athena query results](docs/screenshots/athena-query-results-screenshot.png)
 
 ### Dashboards
 
-![QuickSight repository trends](docs/quicksight-repository-trends-screenshot.png)
-![QuickSight class hotspots](docs/quicksight-classes-hotspots-screenshot.png)
-![QuickSight method hotspots](docs/quicksight-methods-hotspots-screenshot.png)
+![QuickSight repository trends](docs/screenshots/quicksight-repository-trends-screenshot.png)
+![QuickSight class hotspots](docs/screenshots/quicksight-classes-hotspots-screenshot.png)
+![QuickSight method hotspots](docs/screenshots/quicksight-methods-hotspots-screenshot.png)
 
 ## Metrics
 
