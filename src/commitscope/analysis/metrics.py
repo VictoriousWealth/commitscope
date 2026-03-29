@@ -432,6 +432,7 @@ class JsTsAnalyzer:
             qualified = f"{self.relative_path}.{class_name}"
             methods: list[TextMethod] = []
             for child in body_node.named_children:
+                child = self._unwrap_decorated_definition(child)
                 if child.type == "method_definition":
                     method = self._build_method(qualified, child)
                 elif child.type in {"field_definition", "public_field_definition"}:
@@ -627,6 +628,14 @@ class JsTsAnalyzer:
 
     def _text(self, node) -> str:
         return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+
+    def _unwrap_decorated_definition(self, node):
+        if node.type != "decorated_definition":
+            return node
+        for child in node.named_children:
+            if child.type != "decorator":
+                return child
+        return node
 
 
 class CStyleAnalyzer:
