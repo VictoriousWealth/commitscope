@@ -90,6 +90,9 @@ def test_run_pipeline_uploads_after_manifest_and_restores_branch(tmp_path, monke
     )
 
     calls: list[str] = []
+    stale_file = Path(config.output_root) / "curated" / "old.txt"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_text("stale", encoding="utf-8")
 
     monkeypatch.setattr("commitscope.pipeline.run.clone_or_update_repository", lambda repo_config: tmp_path / "repo")
     monkeypatch.setattr("commitscope.pipeline.run.select_commits", lambda repo_path, repo_config: [commit])
@@ -110,17 +113,24 @@ def test_run_pipeline_uploads_after_manifest_and_restores_branch(tmp_path, monke
         calls.append("manifest")
         return Path(config.output_root) / "curated" / "runtime_manifest.json"
 
+    def fake_delete(bucket, prefixes, region):
+        calls.append("clear-s3")
+        assert prefixes == ["raw", "processed", "curated"]
+
     def fake_upload(root, bucket, prefix, region):
         calls.append("upload")
         assert calls[-2] == "manifest"
 
     monkeypatch.setattr("commitscope.pipeline.run.write_runtime_manifest", fake_manifest)
+    monkeypatch.setattr("commitscope.pipeline.run.delete_prefixes_from_s3", fake_delete)
     monkeypatch.setattr("commitscope.pipeline.run.upload_directory_to_s3", fake_upload)
     monkeypatch.setattr("commitscope.pipeline.run.restore_branch", lambda repo_path, branch: calls.append(f"restore:{branch}"))
 
     outputs = run_pipeline(config)
 
     assert outputs["runtime_manifest"].name == "runtime_manifest.json"
+    assert not stale_file.exists()
+    assert calls[0] == "clear-s3"
     assert "upload" in calls
     assert calls[-1] == "upload"
     assert "restore:main" in calls
