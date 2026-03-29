@@ -12,7 +12,7 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 - Athena queries the processed metrics
 - QuickSight dashboards read the Athena-backed datasets directly
 - each new cloud execution replaces the previous repo snapshot in the dashboard-backed data lake
-- the automated local test suite currently passes with `45` tests
+- the automated local test suite currently passes with `49` tests
 
 ## Architecture
 
@@ -67,6 +67,9 @@ Metric semantics and approximations are documented in [metric_contract.md](/User
 - Java: AST-backed class and method analysis via `JavaParser`
 - JavaScript: AST-backed class and method analysis via `@babel/parser`
 - TypeScript: AST-backed class and method analysis via `ts-morph`
+- Go: parser-backed struct and method analysis via `tree-sitter-go`
+- Rust: parser-backed `struct` / `impl` method analysis via `tree-sitter-rust`
+- C#: parser-backed class and method analysis via `tree-sitter-c-sharp`
 - other languages: file-level summaries where supported by the language mapper
 
 ## Testing
