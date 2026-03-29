@@ -11,6 +11,7 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 - Glue catalogs the generated datasets
 - Athena queries the processed metrics
 - QuickSight dashboards read the Athena-backed datasets directly
+- each new cloud execution replaces the previous repo snapshot in the dashboard-backed data lake
 - the automated local test suite currently passes with `45` tests
 
 ## Architecture
