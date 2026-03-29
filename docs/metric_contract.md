@@ -10,6 +10,9 @@ CommitScope now performs structural parsing for these languages:
 - Java: `JavaParser`
 - JavaScript: `@babel/parser`
 - TypeScript: `ts-morph`
+- Go: `tree-sitter-go`
+- Rust: `tree-sitter-rust`
+- C#: `tree-sitter-c-sharp`
 
 These analyzers extract classes, methods, constructors, and method bodies from language-native syntax trees rather than from regex-only text scans. The metrics still follow notebook-style intent, but they are not full compiler or type-checker implementations.
 
@@ -27,7 +30,7 @@ These analyzers extract classes, methods, constructors, and method bodies from l
 
 ## Precision Notes
 
-AST-backed parsing improves robustness for unusual formatting, annotations, generics, decorators, constructors, and class-field arrow functions. It does not mean the project performs full semantic resolution.
+AST-backed parsing improves robustness for unusual formatting, annotations, generics, decorators, constructors, class-field arrow functions, Go receivers, Rust `impl` blocks, and C# member syntax. It does not mean the project performs full semantic resolution.
 
 These metrics remain approximations:
 
