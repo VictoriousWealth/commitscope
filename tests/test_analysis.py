@@ -131,6 +131,96 @@ def test_typescript_metrics_are_generated_for_simple_class() -> None:
         assert any(row["language"] == "typescript" for row in result.method_metrics)
 
 
+def test_go_metrics_are_generated_for_struct_methods() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.go").write_text(
+            "package sample\n"
+            "type Counter struct {\n"
+            "    value int\n"
+            "}\n"
+            "func (c *Counter) Inc(step int) int {\n"
+            "    if step > 0 {\n"
+            "        c.value += step\n"
+            "    }\n"
+            "    return c.value\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        assert any(row["class_name"] == "sample.go.Counter" for row in result.class_metrics)
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "sample.go.Counter.Inc")
+        assert method_row["language"] == "go"
+        assert method_row["parameters"] == 1
+        assert method_row["cc"] >= 2
+
+
+def test_rust_metrics_are_generated_for_impl_methods() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.rs").write_text(
+            "struct Counter {\n"
+            "    value: i32,\n"
+            "}\n"
+            "impl Counter {\n"
+            "    fn inc(&self, step: i32) -> i32 {\n"
+            "        if step > 0 {\n"
+            "            return self.value + step;\n"
+            "        }\n"
+            "        self.value\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        assert any(row["class_name"] == "sample.rs.Counter" for row in result.class_metrics)
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "sample.rs.Counter.inc")
+        assert method_row["language"] == "rust"
+        assert method_row["parameters"] == 1
+        assert method_row["cc"] >= 2
+
+
+def test_csharp_metrics_are_generated_for_simple_class() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "Sample.cs").write_text(
+            "public class Sample {\n"
+            "    private int _value;\n"
+            "    public int Read(int step) {\n"
+            "        if (step > 0) {\n"
+            "            return this._value + step;\n"
+            "        }\n"
+            "        return 0;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        assert any(row["class_name"] == "Sample.cs.Sample" for row in result.class_metrics)
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "Sample.cs.Sample.Read")
+        assert method_row["language"] == "csharp"
+        assert method_row["parameters"] == 1
+        assert method_row["cc"] >= 2
+
+
 def test_typescript_public_field_arrow_function_is_treated_as_method() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
