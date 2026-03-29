@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tree_sitter import Language, Parser
+import tree_sitter_c_sharp
+import tree_sitter_go
 import tree_sitter_javascript
+import tree_sitter_rust
 import tree_sitter_typescript
 
 from commitscope.analysis.languages import language_for_file
@@ -27,7 +30,10 @@ class AnalysisResult:
 JAVA_LANGUAGE = "java"
 JAVASCRIPT_LANGUAGE = "javascript"
 TYPESCRIPT_LANGUAGE = "typescript"
-SUPPORTED_C_STYLE_LANGUAGES = {JAVASCRIPT_LANGUAGE, TYPESCRIPT_LANGUAGE}
+GO_LANGUAGE = "go"
+RUST_LANGUAGE = "rust"
+CSHARP_LANGUAGE = "csharp"
+SUPPORTED_C_STYLE_LANGUAGES = {JAVASCRIPT_LANGUAGE, TYPESCRIPT_LANGUAGE, GO_LANGUAGE, RUST_LANGUAGE, CSHARP_LANGUAGE}
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NODE_AST_HELPER = REPO_ROOT / "scripts" / "js_ts_ast_metrics.cjs"
 JAVA_HELPER_SOURCE = REPO_ROOT / "tools" / "java" / "src" / "JavaMetricsMain.java"
@@ -38,6 +44,9 @@ ARG_SEPARATOR = "\x1f"
 TREE_SITTER_LANGUAGES = {
     JAVASCRIPT_LANGUAGE: Language(tree_sitter_javascript.language()),
     TYPESCRIPT_LANGUAGE: Language(tree_sitter_typescript.language_typescript()),
+    GO_LANGUAGE: Language(tree_sitter_go.language()),
+    RUST_LANGUAGE: Language(tree_sitter_rust.language()),
+    CSHARP_LANGUAGE: Language(tree_sitter_c_sharp.language()),
 }
 
 
@@ -261,6 +270,71 @@ class TextClass:
     methods: list[TextMethod]
 
 
+def _compute_lcom(method_access: dict[str, set[str]]) -> float:
+    methods = list(method_access)
+    pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
+    p = 0
+    q = 0
+    for left, right in pairs:
+        if method_access[left] & method_access[right]:
+            q += 1
+        else:
+            p += 1
+    return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
+
+
+def _rows_from_text_classes(classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
+    method_callers: dict[str, set[str]] = defaultdict(set)
+    class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+    method_index: dict[str, list[TextMethod]] = defaultdict(list)
+
+    for text_class in classes:
+        for method in text_class.methods:
+            method_index[method.method_simple_name].append(method)
+
+    for text_class in classes:
+        for method in text_class.methods:
+            caller = method.method_name
+            for target in method.direct_calls:
+                for candidate in method_index.get(target, []):
+                    if candidate.method_name != caller:
+                        method_callers[candidate.method_name].add(caller)
+                        class_fanin_sources[candidate.class_name].add(method.class_name)
+
+    class_rows: list[dict] = []
+    method_rows: list[dict] = []
+    for text_class in classes:
+        lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
+        class_rows.append(
+            {
+                "class_name": text_class.class_name,
+                "wmc": sum(method.cc for method in text_class.methods),
+                "lcom": _compute_lcom(lcom_sources),
+                "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
+                "fanout": sum(method.fanout for method in text_class.methods),
+                "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
+                "rfc": len({method.method_simple_name for method in text_class.methods})
+                + len({call for method in text_class.methods for call in method.direct_calls}),
+                "language": text_class.language,
+            }
+        )
+        for method in text_class.methods:
+            method_rows.append(
+                {
+                    "class_name": text_class.class_name,
+                    "method_name": method.method_name,
+                    "cc": method.cc,
+                    "loc": method.loc,
+                    "lloc": method.lloc,
+                    "parameters": method.parameters,
+                    "fanin": len(method_callers.get(method.method_name, set())),
+                    "fanout": method.fanout,
+                    "language": method.language,
+                }
+            )
+    return class_rows, method_rows
+
+
 class JavaAnalyzer:
     def __init__(self, relative_path: str, source: str, known_class_names: set[str]) -> None:
         self.relative_path = relative_path
@@ -269,69 +343,7 @@ class JavaAnalyzer:
 
     def analyze(self) -> tuple[list[dict], list[dict]]:
         classes = _run_java_helper(self.relative_path, self.source, self.known_class_names)
-        return self._rows_from_classes(classes)
-
-    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
-        method_callers: dict[str, set[str]] = defaultdict(set)
-        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
-        method_index = {
-            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
-            for text_class in classes
-            for method in text_class.methods
-        }
-
-        for text_class in classes:
-            for method in text_class.methods:
-                caller = method.method_name
-                for target in method.direct_calls:
-                    for candidate in method_index.get(target, []):
-                        if candidate.method_name != caller:
-                            method_callers[candidate.method_name].add(caller)
-                            class_fanin_sources[candidate.class_name].add(method.class_name)
-
-        class_rows: list[dict] = []
-        method_rows: list[dict] = []
-        for text_class in classes:
-            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
-            class_rows.append(
-                {
-                    "class_name": text_class.class_name,
-                    "wmc": sum(method.cc for method in text_class.methods),
-                    "lcom": self._compute_lcom(lcom_sources),
-                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
-                    "fanout": sum(method.fanout for method in text_class.methods),
-                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
-                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
-                    "language": text_class.language,
-                }
-            )
-            for method in text_class.methods:
-                method_rows.append(
-                    {
-                        "class_name": text_class.class_name,
-                        "method_name": method.method_name,
-                        "cc": method.cc,
-                        "loc": method.loc,
-                        "lloc": method.lloc,
-                        "parameters": method.parameters,
-                        "fanin": len(method_callers.get(method.method_name, set())),
-                        "fanout": method.fanout,
-                        "language": method.language,
-                    }
-                )
-        return class_rows, method_rows
-
-    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
-        methods = list(method_access)
-        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
-        p = 0
-        q = 0
-        for left, right in pairs:
-            if method_access[left] & method_access[right]:
-                q += 1
-            else:
-                p += 1
-        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
+        return _rows_from_text_classes(classes)
 
 class JavaScriptAnalyzer:
     def __init__(self, language: str, relative_path: str, source: str, known_class_names: set[str]) -> None:
@@ -342,73 +354,302 @@ class JavaScriptAnalyzer:
 
     def analyze(self) -> tuple[list[dict], list[dict]]:
         classes = _run_node_helper(self.language, self.relative_path, self.source, self.known_class_names)
-        return self._rows_from_classes(classes)
-
-    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
-        method_callers: dict[str, set[str]] = defaultdict(set)
-        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
-        method_index = {
-            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
-            for text_class in classes
-            for method in text_class.methods
-        }
-
-        for text_class in classes:
-            for method in text_class.methods:
-                caller = method.method_name
-                for target in method.direct_calls:
-                    for candidate in method_index.get(target, []):
-                        if candidate.method_name != caller:
-                            method_callers[candidate.method_name].add(caller)
-                            class_fanin_sources[candidate.class_name].add(method.class_name)
-
-        class_rows: list[dict] = []
-        method_rows: list[dict] = []
-        for text_class in classes:
-            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
-            class_rows.append(
-                {
-                    "class_name": text_class.class_name,
-                    "wmc": sum(method.cc for method in text_class.methods),
-                    "lcom": self._compute_lcom(lcom_sources),
-                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
-                    "fanout": sum(method.fanout for method in text_class.methods),
-                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
-                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
-                    "language": text_class.language,
-                }
-            )
-            for method in text_class.methods:
-                method_rows.append(
-                    {
-                        "class_name": text_class.class_name,
-                        "method_name": method.method_name,
-                        "cc": method.cc,
-                        "loc": method.loc,
-                        "lloc": method.lloc,
-                        "parameters": method.parameters,
-                        "fanin": len(method_callers.get(method.method_name, set())),
-                        "fanout": method.fanout,
-                        "language": method.language,
-                    }
-                )
-        return class_rows, method_rows
-
-    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
-        methods = list(method_access)
-        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
-        p = 0
-        q = 0
-        for left, right in pairs:
-            if method_access[left] & method_access[right]:
-                q += 1
-            else:
-                p += 1
-        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
+        return _rows_from_text_classes(classes)
 
 
 class TypeScriptAnalyzer(JavaScriptAnalyzer):
     pass
+
+
+class GoAnalyzer:
+    def __init__(self, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.relative_path = relative_path
+        self.source = source
+        self.source_bytes = source.encode("utf-8")
+        self.known_class_names = known_class_names
+        self.parser = Parser(TREE_SITTER_LANGUAGES[GO_LANGUAGE])
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        tree = self.parser.parse(self.source_bytes)
+        root = tree.root_node
+        if root.has_error:
+            return [], []
+
+        structs = {
+            self._text(type_spec.child_by_field_name("name")): f"{self.relative_path}.{self._text(type_spec.child_by_field_name('name'))}"
+            for type_decl in _iter_nodes(root, "type_declaration")
+            for type_spec in type_decl.named_children
+            if type_spec.type == "type_spec"
+            and type_spec.child_by_field_name("name") is not None
+            and (type_node := type_spec.child_by_field_name("type")) is not None
+            and type_node.type == "struct_type"
+        }
+        methods_by_class: dict[str, list[TextMethod]] = defaultdict(list)
+        for method_node in _iter_nodes(root, "method_declaration"):
+            receiver_node = method_node.child_by_field_name("receiver")
+            name_node = method_node.child_by_field_name("name")
+            params_node = method_node.child_by_field_name("parameters")
+            body_node = method_node.child_by_field_name("body")
+            if receiver_node is None or name_node is None or params_node is None or body_node is None:
+                continue
+            receiver_type = self._go_receiver_type(receiver_node)
+            qualified_class_name = structs.get(receiver_type, f"{self.relative_path}.{receiver_type}")
+            method = self._build_go_method(qualified_class_name, method_node, name_node, params_node, body_node)
+            methods_by_class[qualified_class_name].append(method)
+        classes = [TextClass(class_name=class_name, language=GO_LANGUAGE, methods=methods) for class_name, methods in methods_by_class.items()]
+        return self._rows_from_classes(classes)
+
+    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
+        return _rows_from_text_classes(classes)
+
+    def _go_receiver_type(self, receiver_node) -> str:
+        for parameter in receiver_node.named_children:
+            if parameter.type != "parameter_declaration":
+                continue
+            for child in parameter.named_children:
+                if child.type == "type_identifier":
+                    return self._text(child)
+                if child.type == "pointer_type":
+                    nested = child.named_children[-1] if child.named_children else None
+                    if nested is not None:
+                        return self._text(nested)
+        return "Receiver"
+
+    def _build_go_method(self, qualified_class_name: str, method_node, name_node, params_node, body_node) -> TextMethod:
+        method_simple_name = self._text(name_node)
+        snippet = self._text(method_node)
+        body_text = self._text(body_node)
+        lines = [line for line in body_text.splitlines() if line.strip()]
+        receiver_name = self._go_receiver_name(method_node.child_by_field_name("receiver"))
+        call_nodes = [node for node in _iter_nodes(body_node, "call_expression")]
+        direct_calls = set()
+        for call_node in call_nodes:
+            function_node = call_node.child_by_field_name("function")
+            if function_node is None:
+                continue
+            if function_node.type in {"identifier", "field_identifier"}:
+                direct_calls.add(self._text(function_node))
+            elif function_node.type == "selector_expression":
+                field = function_node.child_by_field_name("field")
+                if field is not None:
+                    direct_calls.add(self._text(field))
+        instance_vars = {
+            self._text(field_node)
+            for node in _iter_nodes(body_node, "selector_expression")
+            if (operand := node.child_by_field_name("operand")) is not None
+            and operand.type == "identifier"
+            and self._text(operand) == receiver_name
+            and (field_node := node.child_by_field_name("field")) is not None
+        }
+        class_refs = {
+            f"{self.relative_path}.{self._text(node)}"
+            for node in _iter_nodes(body_node, "type_identifier")
+            if self._text(node) in self.known_class_names
+        }
+        cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in {"if_statement", "for_statement", "expression_switch_statement", "type_switch_statement", "select_statement"})
+        cc += len(re.findall(r"&&|\|\|", body_text))
+        parameters = sum(1 for child in params_node.named_children if child.type == "parameter_declaration")
+        return TextMethod(
+            class_name=qualified_class_name,
+            method_name=f"{qualified_class_name}.{method_simple_name}",
+            method_simple_name=method_simple_name,
+            language=GO_LANGUAGE,
+            body=snippet,
+            loc=snippet.count("\n") + 1 if snippet else 1,
+            lloc=len(lines) or 1,
+            parameters=parameters,
+            fanout=len(call_nodes),
+            cc=cc,
+            instance_vars=instance_vars,
+            direct_calls=direct_calls,
+            class_refs=class_refs,
+        )
+
+    def _go_receiver_name(self, receiver_node) -> str:
+        if receiver_node is None:
+            return "self"
+        for parameter in receiver_node.named_children:
+            if parameter.type != "parameter_declaration":
+                continue
+            for child in parameter.named_children:
+                if child.type == "identifier":
+                    return self._text(child)
+        return "self"
+
+    def _text(self, node) -> str:
+        return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+
+
+class RustAnalyzer:
+    def __init__(self, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.relative_path = relative_path
+        self.source = source
+        self.source_bytes = source.encode("utf-8")
+        self.known_class_names = known_class_names
+        self.parser = Parser(TREE_SITTER_LANGUAGES[RUST_LANGUAGE])
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        tree = self.parser.parse(self.source_bytes)
+        root = tree.root_node
+        if root.has_error:
+            return [], []
+
+        methods_by_class: dict[str, list[TextMethod]] = defaultdict(list)
+        for impl_node in _iter_nodes(root, "impl_item"):
+            type_node = impl_node.child_by_field_name("type")
+            body_node = impl_node.child_by_field_name("body")
+            if type_node is None or body_node is None:
+                continue
+            class_name = self._text(type_node)
+            qualified_class_name = f"{self.relative_path}.{class_name}"
+            for function_node in _iter_nodes(body_node, "function_item"):
+                name_node = function_node.child_by_field_name("name")
+                params_node = function_node.child_by_field_name("parameters")
+                fn_body_node = function_node.child_by_field_name("body")
+                if name_node is None or params_node is None or fn_body_node is None:
+                    continue
+                methods_by_class[qualified_class_name].append(
+                    self._build_rust_method(qualified_class_name, function_node, name_node, params_node, fn_body_node)
+                )
+        classes = [TextClass(class_name=class_name, language=RUST_LANGUAGE, methods=methods) for class_name, methods in methods_by_class.items()]
+        return _rows_from_text_classes(classes)
+
+    def _build_rust_method(self, qualified_class_name: str, function_node, name_node, params_node, body_node) -> TextMethod:
+        method_simple_name = self._text(name_node)
+        snippet = self._text(function_node)
+        body_text = self._text(body_node)
+        lines = [line for line in body_text.splitlines() if line.strip()]
+        call_nodes = [node for node in _iter_nodes(body_node, "call_expression")]
+        direct_calls = set()
+        for call_node in call_nodes:
+            function_node = call_node.child_by_field_name("function")
+            if function_node is None:
+                continue
+            if function_node.type == "identifier":
+                direct_calls.add(self._text(function_node))
+            elif function_node.type == "field_expression":
+                field = function_node.child_by_field_name("field")
+                if field is not None:
+                    direct_calls.add(self._text(field))
+        instance_vars = {
+            self._text(field_node)
+            for node in _iter_nodes(body_node, "field_expression")
+            if (value_node := node.child_by_field_name("value")) is not None
+            and value_node.type == "self"
+            and (field_node := node.child_by_field_name("field")) is not None
+        }
+        class_refs = {
+            f"{self.relative_path}.{self._text(node)}"
+            for node in _iter_nodes(body_node, "type_identifier")
+            if self._text(node) in self.known_class_names
+        }
+        cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in {"if_expression", "for_expression", "while_expression", "loop_expression", "match_expression"})
+        cc += len(re.findall(r"&&|\|\|", body_text))
+        parameters = sum(1 for child in params_node.named_children if child.type in {"parameter", "self_parameter"})
+        if any(child.type == "self_parameter" for child in params_node.named_children):
+            parameters -= 1
+        return TextMethod(
+            class_name=qualified_class_name,
+            method_name=f"{qualified_class_name}.{method_simple_name}",
+            method_simple_name=method_simple_name,
+            language=RUST_LANGUAGE,
+            body=snippet,
+            loc=snippet.count("\n") + 1 if snippet else 1,
+            lloc=len(lines) or 1,
+            parameters=max(parameters, 0),
+            fanout=len(call_nodes),
+            cc=cc,
+            instance_vars=instance_vars,
+            direct_calls=direct_calls,
+            class_refs=class_refs,
+        )
+
+    def _text(self, node) -> str:
+        return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+
+
+class CSharpAnalyzer:
+    def __init__(self, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.relative_path = relative_path
+        self.source = source
+        self.source_bytes = source.encode("utf-8")
+        self.known_class_names = known_class_names
+        self.parser = Parser(TREE_SITTER_LANGUAGES[CSHARP_LANGUAGE])
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        tree = self.parser.parse(self.source_bytes)
+        root = tree.root_node
+        if root.has_error:
+            return [], []
+
+        classes: list[TextClass] = []
+        for class_node in _iter_nodes(root, "class_declaration"):
+            name_node = class_node.child_by_field_name("name")
+            body_node = class_node.child_by_field_name("body")
+            if name_node is None or body_node is None:
+                continue
+            qualified_class_name = f"{self.relative_path}.{self._text(name_node)}"
+            methods = []
+            for method_node in _iter_nodes(body_node, "method_declaration"):
+                method_name = method_node.child_by_field_name("name")
+                params_node = method_node.child_by_field_name("parameters")
+                block_node = method_node.child_by_field_name("body")
+                if method_name is None or params_node is None or block_node is None:
+                    continue
+                methods.append(self._build_csharp_method(qualified_class_name, method_node, method_name, params_node, block_node))
+            classes.append(TextClass(class_name=qualified_class_name, language=CSHARP_LANGUAGE, methods=methods))
+        return _rows_from_text_classes(classes)
+
+    def _build_csharp_method(self, qualified_class_name: str, method_node, name_node, params_node, body_node) -> TextMethod:
+        method_simple_name = self._text(name_node)
+        snippet = self._text(method_node)
+        body_text = self._text(body_node)
+        lines = [line for line in body_text.splitlines() if line.strip()]
+        call_nodes = [node for node in _iter_nodes(body_node, "invocation_expression")]
+        direct_calls = set()
+        for call_node in call_nodes:
+            function_node = call_node.child_by_field_name("function")
+            if function_node is None:
+                continue
+            if function_node.type == "identifier":
+                direct_calls.add(self._text(function_node))
+            elif function_node.type == "member_access_expression":
+                name = function_node.child_by_field_name("name")
+                if name is not None:
+                    direct_calls.add(self._text(name))
+        instance_vars = {
+            self._text(name_node)
+            for node in _iter_nodes(body_node, "member_access_expression")
+            if (expr_node := node.child_by_field_name("expression")) is not None
+            and expr_node.type == "this_expression"
+            and (name_node := node.child_by_field_name("name")) is not None
+        }
+        class_refs = {
+            f"{self.relative_path}.{self._text(node)}"
+            for node in _iter_nodes(body_node, "identifier")
+            if self._text(node) in self.known_class_names
+        }
+        cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in {"if_statement", "for_statement", "foreach_statement", "while_statement", "do_statement", "switch_expression", "switch_statement", "catch_clause"})
+        cc += len(re.findall(r"&&|\|\|", body_text))
+        parameters = sum(1 for child in params_node.named_children if child.type == "parameter")
+        return TextMethod(
+            class_name=qualified_class_name,
+            method_name=f"{qualified_class_name}.{method_simple_name}",
+            method_simple_name=method_simple_name,
+            language=CSHARP_LANGUAGE,
+            body=snippet,
+            loc=snippet.count("\n") + 1 if snippet else 1,
+            lloc=len(lines) or 1,
+            parameters=parameters,
+            fanout=len(call_nodes),
+            cc=cc,
+            instance_vars=instance_vars,
+            direct_calls=direct_calls,
+            class_refs=class_refs,
+        )
+
+    def _text(self, node) -> str:
+        return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
 
 class TreeSitterAnalyzer:
@@ -446,57 +687,7 @@ class TreeSitterAnalyzer:
                 if method is not None:
                     methods.append(method)
             classes.append(TextClass(class_name=qualified, language=self.language, methods=methods))
-        return self._rows_from_classes(classes)
-
-    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
-        method_callers: dict[str, set[str]] = defaultdict(set)
-        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
-        method_index = {
-            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
-            for text_class in classes
-            for method in text_class.methods
-        }
-
-        for text_class in classes:
-            for method in text_class.methods:
-                caller = method.method_name
-                for target in method.direct_calls:
-                    for candidate in method_index.get(target, []):
-                        if candidate.method_name != caller:
-                            method_callers[candidate.method_name].add(caller)
-                            class_fanin_sources[candidate.class_name].add(method.class_name)
-
-        class_rows: list[dict] = []
-        method_rows: list[dict] = []
-        for text_class in classes:
-            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
-            class_rows.append(
-                {
-                    "class_name": text_class.class_name,
-                    "wmc": sum(method.cc for method in text_class.methods),
-                    "lcom": self._compute_lcom(lcom_sources),
-                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
-                    "fanout": sum(method.fanout for method in text_class.methods),
-                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
-                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
-                    "language": text_class.language,
-                }
-            )
-            for method in text_class.methods:
-                method_rows.append(
-                    {
-                        "class_name": text_class.class_name,
-                        "method_name": method.method_name,
-                        "cc": method.cc,
-                        "loc": method.loc,
-                        "lloc": method.lloc,
-                        "parameters": method.parameters,
-                        "fanin": len(method_callers.get(method.method_name, set())),
-                        "fanout": method.fanout,
-                        "language": method.language,
-                    }
-                )
-        return class_rows, method_rows
+        return _rows_from_text_classes(classes)
 
     def _build_method(self, qualified_class_name: str, method_node) -> TextMethod | None:
         name_node = method_node.child_by_field_name("name")
@@ -618,18 +809,6 @@ class TreeSitterAnalyzer:
         cc += len(re.findall(r"&&|\|\|", body_text))
         return cc
 
-    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
-        methods = list(method_access)
-        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
-        p = 0
-        q = 0
-        for left, right in pairs:
-            if method_access[left] & method_access[right]:
-                q += 1
-            else:
-                p += 1
-        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
-
     def _text(self, node) -> str:
         return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
@@ -654,56 +833,7 @@ class CStyleAnalyzer:
         if not classes:
             return [], []
 
-        method_callers: dict[str, set[str]] = defaultdict(set)
-        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
-
-        class_rows: list[dict] = []
-        method_rows: list[dict] = []
-
-        method_index = {
-            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
-            for text_class in classes
-            for method in text_class.methods
-        }
-
-        for text_class in classes:
-            for method in text_class.methods:
-                caller = method.method_name
-                for target in method.direct_calls:
-                    for candidate in method_index.get(target, []):
-                        if candidate.method_name != caller:
-                            method_callers[candidate.method_name].add(caller)
-                            class_fanin_sources[candidate.class_name].add(method.class_name)
-
-        for text_class in classes:
-            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
-            class_rows.append(
-                {
-                    "class_name": text_class.class_name,
-                    "wmc": sum(method.cc for method in text_class.methods),
-                    "lcom": self._compute_lcom(lcom_sources),
-                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
-                    "fanout": sum(method.fanout for method in text_class.methods),
-                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
-                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
-                    "language": text_class.language,
-                }
-            )
-            for method in text_class.methods:
-                method_rows.append(
-                    {
-                        "class_name": text_class.class_name,
-                        "method_name": method.method_name,
-                        "cc": method.cc,
-                        "loc": method.loc,
-                        "lloc": method.lloc,
-                        "parameters": method.parameters,
-                        "fanin": len(method_callers.get(method.method_name, set())),
-                        "fanout": method.fanout,
-                        "language": text_class.language,
-                    }
-                )
-        return class_rows, method_rows
+        return _rows_from_text_classes(classes)
 
     def _extract_classes(self) -> list[TextClass]:
         class_pattern = re.compile(r"\bclass\s+([A-Za-z_]\w*)")
@@ -755,19 +885,6 @@ class CStyleAnalyzer:
                 )
             )
         return methods
-
-    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
-        methods = list(method_access)
-        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
-        p = 0
-        q = 0
-        for left, right in pairs:
-            if method_access[left] & method_access[right]:
-                q += 1
-            else:
-                p += 1
-        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
-
 
 def _run_java_helper(relative_path: str, source: str, known_class_names: set[str]) -> list[TextClass]:
     _ensure_java_helper_compiled()
@@ -911,8 +1028,15 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
             except OSError:
                 continue
             text_sources[relative] = (language, source)
-            for class_name in re.findall(r"\bclass\s+([A-Za-z_]\w*)", source):
-                known_text_class_names.add(class_name)
+            if language in {JAVASCRIPT_LANGUAGE, TYPESCRIPT_LANGUAGE, CSHARP_LANGUAGE}:
+                for class_name in re.findall(r"\bclass\s+([A-Za-z_]\w*)", source):
+                    known_text_class_names.add(class_name)
+            elif language == GO_LANGUAGE:
+                for class_name in re.findall(r"\btype\s+([A-Za-z_]\w*)\s+struct\b", source):
+                    known_text_class_names.add(class_name)
+            elif language == RUST_LANGUAGE:
+                for class_name in re.findall(r"\bstruct\s+([A-Za-z_]\w*)\b", source):
+                    known_text_class_names.add(class_name)
 
     class_rows: list[dict] = []
     method_rows: list[dict] = []
@@ -931,6 +1055,12 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
             if language == JAVASCRIPT_LANGUAGE
             else TypeScriptAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
             if language == TYPESCRIPT_LANGUAGE
+            else GoAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language == GO_LANGUAGE
+            else RustAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language == RUST_LANGUAGE
+            else CSharpAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language == CSHARP_LANGUAGE
             else TreeSitterAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
             if language in TREE_SITTER_LANGUAGES
             else CStyleAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
