@@ -27,6 +27,29 @@ class AnalysisResult:
     commit_summary: dict
 
 
+@dataclass(slots=True)
+class PythonModuleInfo:
+    imported_modules: dict[str, str]
+    imported_classes: dict[str, str]
+
+
+@dataclass(slots=True)
+class PythonClassInfo:
+    qualified_name: str
+    module_name: str
+    class_name: str
+    methods: set[str]
+    base_classes: set[str]
+
+
+@dataclass(slots=True)
+class PythonProjectIndex:
+    module_infos: dict[str, PythonModuleInfo]
+    class_infos: dict[str, PythonClassInfo]
+    classes_by_simple: dict[str, list[str]]
+    classes_by_module: dict[str, dict[str, str]]
+
+
 JAVA_LANGUAGE = "java"
 JAVASCRIPT_LANGUAGE = "javascript"
 TYPESCRIPT_LANGUAGE = "typescript"
@@ -50,149 +73,270 @@ TREE_SITTER_LANGUAGES = {
 }
 
 
-class PythonAnalyzer(ast.NodeVisitor):
-    def __init__(self, module_name: str, known_classes: dict[str, list[str]]) -> None:
+class PythonAnalyzer:
+    def __init__(
+        self,
+        module_name: str,
+        project_index: PythonProjectIndex,
+        method_fanin_sources: dict[str, set[str]] | None = None,
+        class_fanin_sources: dict[str, set[str]] | None = None,
+    ) -> None:
         self.module_name = module_name
-        self.known_classes = known_classes
-        self.class_metrics: dict[str, dict] = {}
-        self.current_class: str | None = None
-        self.current_function: str | None = None
-        self.method_fanin_sources: dict[str, set[str]] = defaultdict(set)
-        self.method_definitions: defaultdict[str, list[str]] = defaultdict(list)
-        self.method_call_targets: dict[str, set[str]] = defaultdict(set)
-        self.class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+        self.project_index = project_index
+        self.method_fanin_sources = method_fanin_sources if method_fanin_sources is not None else defaultdict(set)
+        self.class_fanin_sources = class_fanin_sources if class_fanin_sources is not None else defaultdict(set)
 
-    def seed_method_definitions(self, tree: ast.AST) -> None:
-        class_stack: list[str] = []
+    def analyze(self, tree: ast.AST) -> tuple[list[dict], list[dict]]:
+        class_rows: list[dict] = []
+        method_rows: list[dict] = []
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if isinstance(node, ast.ClassDef):
+                nested_class_rows, nested_method_rows = self._analyze_class_node(node)
+                class_rows.extend(nested_class_rows)
+                method_rows.extend(nested_method_rows)
+        return class_rows, method_rows
 
-        class Collector(ast.NodeVisitor):
-            def __init__(self, outer: PythonAnalyzer) -> None:
-                self.outer = outer
+    def _analyze_class_node(self, node: ast.ClassDef) -> tuple[list[dict], list[dict]]:
+        qualified_class_name = f"{self.module_name}.{node.name}"
+        class_info = self.project_index.class_infos.get(qualified_class_name)
+        if class_info is None:
+            return [], []
 
-            def visit_ClassDef(self, node: ast.ClassDef) -> None:
-                class_stack.append(node.name)
-                self.generic_visit(node)
-                class_stack.pop()
-
-            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-                owner = ".".join(class_stack) if class_stack else "<module>"
-                qualified = f"{self.outer.module_name}.{owner}.{node.name}"
-                self.outer.method_definitions[node.name].append(qualified)
-                self.generic_visit(node)
-
-            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-                self.visit_FunctionDef(node)
-
-        Collector(self).visit(tree)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        previous_class = self.current_class
-        class_name = f"{self.module_name}.{node.name}"
-        self.current_class = class_name
-        self.class_metrics.setdefault(
-            class_name,
-            {
-                "class_name": class_name,
-                "wmc": 0,
-                "lcom": 0.0,
-                "fanin": 0,
-                "fanout": 0,
-                "cbo": 0,
-                "rfc": 0,
-                "language": "python",
-                "methods": {},
-            },
-        )
-
+        class_rows: list[dict] = []
+        method_rows: list[dict] = []
+        method_payloads: dict[str, dict] = {}
         method_access: dict[str, set[str]] = {}
-        external_classes: set[str] = set()
-        directly_called_methods: set[str] = set()
+        external_classes: set[str] = set(class_info.base_classes)
+        direct_response_methods: set[str] = set()
+        class_self_attr_types = self._class_self_attribute_types(node)
 
         for item in node.body:
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self.current_function = item.name
-                method_key = self._method_key(node.name, item.name)
-                self.class_metrics[class_name]["methods"][method_key] = {
-                    "method_name": method_key,
-                    "class_name": class_name,
-                    "cc": 1,
-                    "loc": self._compute_loc(item),
-                    "lloc": self._compute_lloc(item),
-                    "parameters": self._parameter_count(item),
-                    "fanin": 0,
-                    "fanout": sum(1 for child in ast.walk(item) if isinstance(child, ast.Call)),
-                    "language": "python",
-                }
-                method_access[method_key] = self._collect_instance_variables(item)
-                external_classes.update(self._collect_coupled_classes(item))
-                directly_called_methods.update(self._collect_direct_calls(item))
-                self.generic_visit(item)
-                self.current_function = None
+                (
+                    method_payload,
+                    instance_vars,
+                    resolved_methods,
+                    resolved_classes,
+                ) = self._analyze_method_node(class_info, item, class_self_attr_types)
+                method_payloads[method_payload["method_name"]] = method_payload
+                method_access[method_payload["method_name"]] = instance_vars
+                external_classes.update(resolved_classes)
+                for target_method in resolved_methods:
+                    if target_method != method_payload["method_name"]:
+                        self.method_fanin_sources[target_method].add(method_payload["method_name"])
+                        target_class_name = target_method.rsplit(".", maxsplit=1)[0]
+                        if target_class_name != qualified_class_name:
+                            self.class_fanin_sources[target_class_name].add(qualified_class_name)
+                        direct_response_methods.add(target_method)
             elif isinstance(item, ast.ClassDef):
-                self.visit(item)
+                nested_class_rows, nested_method_rows = self._analyze_class_node(item)
+                class_rows.extend(nested_class_rows)
+                method_rows.extend(nested_method_rows)
 
-        method_values = self.class_metrics[class_name]["methods"].values()
-        self.class_metrics[class_name]["wmc"] = sum(method["cc"] for method in method_values)
-        self.class_metrics[class_name]["lcom"] = self._compute_lcom(method_access)
-        self.class_metrics[class_name]["fanout"] = sum(method["fanout"] for method in method_values)
-        self.class_metrics[class_name]["cbo"] = len({target for target in external_classes if target != class_name})
-        self.class_metrics[class_name]["rfc"] = len({name.rsplit(".", maxsplit=1)[-1] for name in method_access}) + len(directly_called_methods)
+        class_row = {
+            "class_name": qualified_class_name,
+            "wmc": sum(payload["cc"] for payload in method_payloads.values()),
+            "lcom": _compute_lcom(method_access),
+            "fanin": 0,
+            "fanout": sum(payload["fanout"] for payload in method_payloads.values()),
+            "cbo": len({target for target in external_classes if target != qualified_class_name}),
+            "rfc": len(class_info.methods) + len({target for target in direct_response_methods if target.rsplit(".", maxsplit=1)[0] != qualified_class_name}),
+            "language": "python",
+        }
+        class_rows.insert(0, class_row)
 
-        self.current_class = previous_class
-
-    def visit_If(self, node: ast.If) -> None:
-        self._increase_complexity()
-        self.generic_visit(node)
-
-    def visit_For(self, node: ast.For) -> None:
-        self._increase_complexity()
-        self.generic_visit(node)
-
-    def visit_While(self, node: ast.While) -> None:
-        self._increase_complexity()
-        self.generic_visit(node)
-
-    def visit_Try(self, node: ast.Try) -> None:
-        for _ in node.handlers:
-            self._increase_complexity()
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        if self.current_class and self.current_function:
-            caller = self._method_key(self.current_class.rsplit(".", maxsplit=1)[-1], self.current_function)
-            callee_name = None
-            if isinstance(node.func, ast.Name):
-                callee_name = node.func.id
-            elif isinstance(node.func, ast.Attribute):
-                callee_name = node.func.attr
-            if callee_name:
-                for target_method in self.method_definitions.get(callee_name, []):
-                    if target_method != caller:
-                        self.method_fanin_sources[target_method].add(caller)
-                        self.method_call_targets[caller].add(target_method)
-                for target_class in self.known_classes.get(callee_name, []):
-                    if target_class != self.current_class:
-                        self.class_fanin_sources[target_class].add(self.current_class)
-        self.generic_visit(node)
-
-    def finalize(self) -> tuple[list[dict], list[dict]]:
-        class_rows: list[dict] = []
-        method_rows: list[dict] = []
-        for class_name, payload in self.class_metrics.items():
-            payload["fanin"] = len(self.class_fanin_sources.get(class_name, set()))
-            class_rows.append({k: v for k, v in payload.items() if k != "methods"})
-            for method_name, method_payload in payload["methods"].items():
-                method_payload["fanin"] = len(self.method_fanin_sources.get(method_name, set()))
-                method_rows.append(method_payload)
+        for method_name, method_payload in method_payloads.items():
+            method_rows.append(method_payload)
         return class_rows, method_rows
 
-    def _increase_complexity(self, increment: int = 1) -> None:
-        if self.current_class and self.current_function:
-            method_name = self._method_key(self.current_class.rsplit(".", maxsplit=1)[-1], self.current_function)
-            self.class_metrics[self.current_class]["methods"][method_name]["cc"] += increment
+    def _analyze_method_node(
+        self,
+        class_info: PythonClassInfo,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        class_self_attr_types: dict[str, str],
+    ) -> tuple[dict, set[str], set[str], set[str]]:
+        method_name = f"{class_info.qualified_name}.{node.name}"
+        local_var_types: dict[str, str] = {}
+        self_attr_types = dict(class_self_attr_types)
+        resolved_methods: set[str] = set()
+        resolved_classes: set[str] = set(class_info.base_classes)
+        instance_vars = self._collect_instance_variables(node)
 
-    def _method_key(self, class_name: str, method_name: str) -> str:
-        return f"{self.module_name}.{class_name}.{method_name}"
+        class MethodResolver(ast.NodeVisitor):
+            def __init__(self, outer: PythonAnalyzer) -> None:
+                self.outer = outer
+
+            def visit_Assign(self, assign_node: ast.Assign) -> None:
+                inferred_type = self.outer._infer_python_expr_type(assign_node.value, class_info, local_var_types, self_attr_types)
+                if inferred_type:
+                    for target in assign_node.targets:
+                        self.outer._bind_python_target_type(target, inferred_type, local_var_types, self_attr_types)
+                self.generic_visit(assign_node)
+
+            def visit_AnnAssign(self, assign_node: ast.AnnAssign) -> None:
+                inferred_type = self.outer._infer_python_expr_type(assign_node.value, class_info, local_var_types, self_attr_types) if assign_node.value else None
+                if inferred_type:
+                    self.outer._bind_python_target_type(assign_node.target, inferred_type, local_var_types, self_attr_types)
+                self.generic_visit(assign_node)
+
+            def visit_Call(self, call_node: ast.Call) -> None:
+                target_method, target_class = self.outer._resolve_python_call(call_node, class_info, local_var_types, self_attr_types)
+                if target_method:
+                    resolved_methods.add(target_method)
+                    resolved_classes.add(target_method.rsplit(".", maxsplit=1)[0])
+                elif target_class:
+                    resolved_classes.add(target_class)
+                self.generic_visit(call_node)
+
+        MethodResolver(self).visit(node)
+
+        payload = {
+            "method_name": method_name,
+            "class_name": class_info.qualified_name,
+            "cc": self._python_complexity(node),
+            "loc": self._compute_loc(node),
+            "lloc": self._compute_lloc(node),
+            "parameters": self._parameter_count(node),
+            "fanin": 0,
+            "fanout": sum(1 for child in ast.walk(node) if isinstance(child, ast.Call)),
+            "language": "python",
+        }
+        return payload, instance_vars, resolved_methods, resolved_classes
+
+    def _class_self_attribute_types(self, node: ast.ClassDef) -> dict[str, str]:
+        attr_types: dict[str, str] = {}
+        class_info = self.project_index.class_infos.get(f"{self.module_name}.{node.name}")
+        if class_info is None:
+            return attr_types
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
+                local_var_types: dict[str, str] = {}
+
+                class InitResolver(ast.NodeVisitor):
+                    def __init__(self, outer: PythonAnalyzer) -> None:
+                        self.outer = outer
+
+                    def visit_Assign(self, assign_node: ast.Assign) -> None:
+                        inferred_type = self.outer._infer_python_expr_type(assign_node.value, class_info, local_var_types, attr_types)
+                        if inferred_type:
+                            for target in assign_node.targets:
+                                self.outer._bind_python_target_type(target, inferred_type, local_var_types, attr_types)
+                        self.generic_visit(assign_node)
+
+                    def visit_AnnAssign(self, assign_node: ast.AnnAssign) -> None:
+                        inferred_type = self.outer._infer_python_expr_type(assign_node.value, class_info, local_var_types, attr_types) if assign_node.value else None
+                        if inferred_type:
+                            self.outer._bind_python_target_type(assign_node.target, inferred_type, local_var_types, attr_types)
+                        self.generic_visit(assign_node)
+
+                InitResolver(self).visit(item)
+        return attr_types
+
+    def _resolve_python_call(
+        self,
+        node: ast.Call,
+        class_info: PythonClassInfo,
+        local_var_types: dict[str, str],
+        self_attr_types: dict[str, str],
+    ) -> tuple[str | None, str | None]:
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+            if name in class_info.methods:
+                return f"{class_info.qualified_name}.{name}", None
+            resolved_class = self._resolve_python_class_name(name, class_info)
+            if resolved_class:
+                return None, resolved_class
+            return None, None
+        if isinstance(node.func, ast.Attribute):
+            owner_class = self._resolve_python_value_type(node.func.value, class_info, local_var_types, self_attr_types)
+            if owner_class:
+                owner_info = self.project_index.class_infos.get(owner_class)
+                if owner_info and node.func.attr in owner_info.methods:
+                    return f"{owner_class}.{node.func.attr}", owner_class
+                return None, owner_class
+            resolved_class = self._resolve_python_attribute_class(node.func.value, node.func.attr, class_info)
+            if resolved_class:
+                return None, resolved_class
+        return None, None
+
+    def _resolve_python_value_type(
+        self,
+        node: ast.AST,
+        class_info: PythonClassInfo,
+        local_var_types: dict[str, str],
+        self_attr_types: dict[str, str],
+    ) -> str | None:
+        if isinstance(node, ast.Name):
+            if node.id in local_var_types:
+                return local_var_types[node.id]
+            return None
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
+            return self_attr_types.get(node.attr)
+        if isinstance(node, ast.Call):
+            _, target_class = self._resolve_python_call(node, class_info, local_var_types, self_attr_types)
+            return target_class
+        return None
+
+    def _resolve_python_class_name(self, name: str, class_info: PythonClassInfo) -> str | None:
+        module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}))
+        if name in module_info.imported_classes:
+            return module_info.imported_classes[name]
+        module_class = self.project_index.classes_by_module.get(class_info.module_name, {}).get(name)
+        if module_class:
+            return module_class
+        candidates = self.project_index.classes_by_simple.get(name, [])
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def _resolve_python_attribute_class(self, value: ast.AST, attr: str, class_info: PythonClassInfo) -> str | None:
+        if isinstance(value, ast.Name):
+            module_info = self.project_index.module_infos.get(class_info.module_name, PythonModuleInfo({}, {}))
+            imported_module = module_info.imported_modules.get(value.id)
+            if imported_module:
+                return self.project_index.classes_by_module.get(imported_module, {}).get(attr)
+        return None
+
+    def _infer_python_expr_type(
+        self,
+        node: ast.AST | None,
+        class_info: PythonClassInfo,
+        local_var_types: dict[str, str],
+        self_attr_types: dict[str, str],
+    ) -> str | None:
+        if node is None:
+            return None
+        if isinstance(node, ast.Call):
+            _, target_class = self._resolve_python_call(node, class_info, local_var_types, self_attr_types)
+            return target_class
+        if isinstance(node, ast.Name):
+            return local_var_types.get(node.id)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
+            return self_attr_types.get(node.attr)
+        return None
+
+    def _bind_python_target_type(
+        self,
+        target: ast.AST,
+        inferred_type: str,
+        local_var_types: dict[str, str],
+        self_attr_types: dict[str, str],
+    ) -> None:
+        if isinstance(target, ast.Name):
+            local_var_types[target.id] = inferred_type
+        elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
+            self_attr_types[target.attr] = inferred_type
+
+    def _python_complexity(self, node: ast.AST) -> int:
+        cc = 1
+        for child in ast.walk(node):
+            if isinstance(child, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.IfExp, ast.Match)):
+                cc += 1
+            elif isinstance(child, ast.Try):
+                cc += len(child.handlers)
+            elif isinstance(child, ast.BoolOp):
+                cc += max(len(child.values) - 1, 0)
+        return cc
 
     def _compute_loc(self, node: ast.AST) -> int:
         return (node.end_lineno - node.lineno + 1) if hasattr(node, "end_lineno") else 1
@@ -213,37 +357,6 @@ class PythonAnalyzer(ast.NodeVisitor):
             if isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name) and child.value.id == "self":
                 instance_vars.add(child.attr)
         return instance_vars
-
-    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
-        pairs = [(left, right) for index, left in enumerate(method_access) for right in list(method_access)[index + 1 :]]
-        p = 0
-        q = 0
-        for left, right in pairs:
-            if method_access[left] & method_access[right]:
-                q += 1
-            else:
-                p += 1
-        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
-
-    def _collect_coupled_classes(self, node: ast.AST) -> set[str]:
-        coupled: set[str] = set()
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                if isinstance(child.func, ast.Name):
-                    coupled.update(self.known_classes.get(child.func.id, []))
-                elif isinstance(child.func, ast.Attribute):
-                    coupled.update(self.known_classes.get(child.func.attr, []))
-        return coupled
-
-    def _collect_direct_calls(self, node: ast.AST) -> set[str]:
-        calls: set[str] = set()
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                if isinstance(child.func, ast.Name):
-                    calls.add(child.func.id)
-                elif isinstance(child.func, ast.Attribute):
-                    calls.add(child.func.attr)
-        return calls
 
 
 @dataclass(slots=True)
@@ -990,11 +1103,142 @@ def _decode_helper_classes(raw_output: str) -> list[TextClass]:
     return classes
 
 
+def _build_python_project_index(python_trees: dict[str, ast.AST]) -> PythonProjectIndex:
+    import_to_relative: dict[str, str] = {}
+    for relative in python_trees:
+        module_import = _python_relative_to_import_path(relative)
+        if module_import:
+            import_to_relative[module_import] = relative
+
+    class_infos: dict[str, PythonClassInfo] = {}
+    classes_by_simple: dict[str, list[str]] = defaultdict(list)
+    classes_by_module: dict[str, dict[str, str]] = defaultdict(dict)
+
+    for module_name, tree in python_trees.items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            qualified_name = f"{module_name}.{node.name}"
+            methods = {
+                item.name
+                for item in node.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            class_infos[qualified_name] = PythonClassInfo(
+                qualified_name=qualified_name,
+                module_name=module_name,
+                class_name=node.name,
+                methods=methods,
+                base_classes=set(),
+            )
+            classes_by_simple[node.name].append(qualified_name)
+            classes_by_module[module_name][node.name] = qualified_name
+
+    module_infos: dict[str, PythonModuleInfo] = {}
+    for module_name, tree in python_trees.items():
+        imported_modules: dict[str, str] = {}
+        imported_classes: dict[str, str] = {}
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_module = import_to_relative.get(alias.name)
+                    if imported_module:
+                        imported_modules[alias.asname or alias.name.split(".")[-1]] = imported_module
+            elif isinstance(node, ast.ImportFrom):
+                base_import = _python_resolve_import_from(module_name, node.module, node.level)
+                if not base_import:
+                    continue
+                base_module = import_to_relative.get(base_import)
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    if base_module and alias.name in classes_by_module.get(base_module, {}):
+                        imported_classes[alias.asname or alias.name] = classes_by_module[base_module][alias.name]
+                        continue
+                    submodule_import = f"{base_import}.{alias.name}"
+                    submodule = import_to_relative.get(submodule_import)
+                    if submodule:
+                        imported_modules[alias.asname or alias.name] = submodule
+        module_infos[module_name] = PythonModuleInfo(imported_modules=imported_modules, imported_classes=imported_classes)
+
+    for class_info in class_infos.values():
+        class_node = _find_python_class_node(python_trees[class_info.module_name], class_info.class_name)
+        if class_node is None:
+            continue
+        module_info = module_infos.get(class_info.module_name, PythonModuleInfo({}, {}))
+        for base in class_node.bases:
+            resolved = _resolve_python_class_expression(base, class_info.module_name, module_info, classes_by_module, classes_by_simple)
+            if resolved:
+                class_info.base_classes.add(resolved)
+
+    return PythonProjectIndex(
+        module_infos=module_infos,
+        class_infos=class_infos,
+        classes_by_simple=dict(classes_by_simple),
+        classes_by_module=dict(classes_by_module),
+    )
+
+
+def _find_python_class_node(tree: ast.AST, class_name: str) -> ast.ClassDef | None:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return node
+    return None
+
+
+def _python_relative_to_import_path(relative: str) -> str:
+    path = Path(relative)
+    if path.name == "__init__.py":
+        return ".".join(path.parent.parts)
+    if path.suffix == ".py":
+        return ".".join(path.with_suffix("").parts)
+    return ""
+
+
+def _python_resolve_import_from(module_name: str, imported_module: str | None, level: int) -> str:
+    current_parts = Path(module_name).with_suffix("").parts
+    if current_parts and current_parts[-1] == "__init__":
+        current_parts = current_parts[:-1]
+    if level:
+        keep = max(len(current_parts) - level, 0)
+        base_parts = list(current_parts[:keep])
+    else:
+        base_parts = list(current_parts[:-1])
+    imported_parts = imported_module.split(".") if imported_module else []
+    parts = [part for part in [*base_parts, *imported_parts] if part]
+    return ".".join(parts)
+
+
+def _resolve_python_class_expression(
+    node: ast.AST,
+    module_name: str,
+    module_info: PythonModuleInfo,
+    classes_by_module: dict[str, dict[str, str]],
+    classes_by_simple: dict[str, list[str]],
+) -> str | None:
+    if isinstance(node, ast.Name):
+        if node.id in module_info.imported_classes:
+            return module_info.imported_classes[node.id]
+        module_class = classes_by_module.get(module_name, {}).get(node.id)
+        if module_class:
+            return module_class
+        candidates = classes_by_simple.get(node.id, [])
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        imported_module = module_info.imported_modules.get(node.value.id)
+        if imported_module:
+            return classes_by_module.get(imported_module, {}).get(node.attr)
+    if isinstance(node, ast.Subscript):
+        return _resolve_python_class_expression(node.value, module_name, module_info, classes_by_module, classes_by_simple)
+    return None
+
+
 def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: str, branch: str, commit_date: str) -> AnalysisResult:
     python_trees: dict[str, ast.AST] = {}
     text_sources: dict[str, tuple[str, str]] = {}
     file_metrics: list[dict] = []
-    known_classes: dict[str, list[str]] = defaultdict(list)
     known_text_class_names: set[str] = set()
 
     for path in sorted(repo_root.rglob("*")):
@@ -1011,9 +1255,6 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
             except (UnicodeDecodeError, SyntaxError):
                 continue
             python_trees[relative] = tree
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    known_classes[node.name].append(f"{relative}.{node.name}")
         elif language == JAVA_LANGUAGE:
             try:
                 source = path.read_text(encoding="utf-8", errors="ignore")
@@ -1040,13 +1281,27 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
 
     class_rows: list[dict] = []
     method_rows: list[dict] = []
+    python_project_index = _build_python_project_index(python_trees)
+    python_method_fanin_sources: dict[str, set[str]] = defaultdict(set)
+    python_class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+    python_class_rows: list[dict] = []
+    python_method_rows: list[dict] = []
     for module_name, tree in python_trees.items():
-        analyzer = PythonAnalyzer(module_name=module_name, known_classes=known_classes)
-        analyzer.seed_method_definitions(tree)
-        analyzer.visit(tree)
-        module_classes, module_methods = analyzer.finalize()
-        class_rows.extend(_annotate_rows(module_classes, repo_name, branch, commit_hash, commit_date))
-        method_rows.extend(_annotate_rows(module_methods, repo_name, branch, commit_hash, commit_date))
+        analyzer = PythonAnalyzer(
+            module_name=module_name,
+            project_index=python_project_index,
+            method_fanin_sources=python_method_fanin_sources,
+            class_fanin_sources=python_class_fanin_sources,
+        )
+        module_classes, module_methods = analyzer.analyze(tree)
+        python_class_rows.extend(module_classes)
+        python_method_rows.extend(module_methods)
+    for row in python_class_rows:
+        row["fanin"] = len(python_class_fanin_sources.get(row["class_name"], set()))
+    for row in python_method_rows:
+        row["fanin"] = len(python_method_fanin_sources.get(row["method_name"], set()))
+    class_rows.extend(_annotate_rows(python_class_rows, repo_name, branch, commit_hash, commit_date))
+    method_rows.extend(_annotate_rows(python_method_rows, repo_name, branch, commit_hash, commit_date))
     for relative, (language, source) in text_sources.items():
         analyzer = (
             JavaAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
