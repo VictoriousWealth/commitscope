@@ -7,7 +7,7 @@ ENV PYTHONPATH=/app/src
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm openjdk-17-jdk-headless \
+    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm default-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
