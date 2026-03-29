@@ -157,6 +157,90 @@ def test_typescript_public_field_arrow_function_is_treated_as_method() -> None:
         assert method_row["language"] == "typescript"
 
 
+def test_typescript_decorated_method_is_treated_as_method() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.ts").write_text(
+            "function bound(target: unknown, key: string, descriptor: PropertyDescriptor) {\n"
+            "  return descriptor;\n"
+            "}\n"
+            "class Sample {\n"
+            "  @bound\n"
+            "  first(value: number): number {\n"
+            "    if (value > 0 && this.ready) {\n"
+            "      return helper(value);\n"
+            "    }\n"
+            "    return 0;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "sample.ts.Sample.first")
+        assert method_row["parameters"] == 1
+        assert method_row["cc"] >= 3
+
+
+def test_typescript_decorated_field_arrow_function_is_treated_as_method() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.ts").write_text(
+            "function bound(target: unknown, key: string, descriptor?: PropertyDescriptor) {\n"
+            "  return descriptor;\n"
+            "}\n"
+            "class Sample {\n"
+            "  @bound\n"
+            "  first = (value: number): number => {\n"
+            "    if (value > 0 || this.ready) {\n"
+            "      return helper(value);\n"
+            "    }\n"
+            "    return 0;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        method_row = next(row for row in result.method_metrics if row["method_name"] == "sample.ts.Sample.first")
+        assert method_row["fanin"] == 0
+        assert method_row["cc"] >= 3
+
+
+def test_javascript_private_method_is_treated_as_method() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.js").write_text(
+            "class Sample {\n"
+            "  #secret(value) {\n"
+            "    if (value) {\n"
+            "      return helper();\n"
+            "    }\n"
+            "    return 0;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+        assert any(row["method_name"] == "sample.js.Sample.#secret" for row in result.method_metrics)
+
+
 def test_analysis_skips_invalid_python_but_keeps_other_file_metrics() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
@@ -236,6 +320,42 @@ def test_java_analysis_handles_annotations_and_generics() -> None:
         method_row = next(row for row in result.method_metrics if row["method_name"] == "Service.java.Service.names")
         assert method_row["parameters"] == 1
         assert method_row["cc"] >= 3
+
+
+def test_java_analysis_handles_nested_classes() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "Outer.java").write_text(
+            "public class Outer {\n"
+            "    public int top() {\n"
+            "        return 1;\n"
+            "    }\n"
+            "    static class Inner {\n"
+            "        public int nested() {\n"
+            "            if (true) {\n"
+            "                return 2;\n"
+            "            }\n"
+            "            return 0;\n"
+            "        }\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        class_names = {row["class_name"] for row in result.class_metrics}
+        method_names = {row["method_name"] for row in result.method_metrics}
+        assert "Outer.java.Outer" in class_names
+        assert "Outer.java.Inner" in class_names
+        assert "Outer.java.Outer.top" in method_names
+        assert "Outer.java.Inner.nested" in method_names
 
 
 def test_total_loc_does_not_double_count_python_or_c_style_methods() -> None:
