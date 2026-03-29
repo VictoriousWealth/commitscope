@@ -287,7 +287,7 @@ resource "aws_glue_crawler" "processed" {
     path = "s3://${aws_s3_bucket.data_lake.bucket}/processed/"
   }
   schema_change_policy {
-    delete_behavior = "LOG"
+    delete_behavior = "DELETE_FROM_DATABASE"
     update_behavior = "UPDATE_IN_DATABASE"
   }
 }
