@@ -63,9 +63,9 @@ Metric semantics and approximations are documented in [metric_contract.md](/User
 ## Language Support
 
 - Python: AST-backed class and method analysis
-- Java: AST-backed class and method analysis via `javalang`
-- JavaScript: AST-backed class and method analysis via `tree-sitter`
-- TypeScript: AST-backed class and method analysis via `tree-sitter`
+- Java: AST-backed class and method analysis via `JavaParser`
+- JavaScript: AST-backed class and method analysis via `@babel/parser`
+- TypeScript: AST-backed class and method analysis via `ts-morph`
 - other languages: file-level summaries where supported by the language mapper
 
 ## Testing
