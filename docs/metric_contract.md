@@ -7,11 +7,11 @@ CommitScope preserves the notebook-style metrics as explicit approximations rath
 CommitScope now performs structural parsing for these languages:
 
 - Python: built-in `ast`
-- Java: `javalang`
-- JavaScript: `tree-sitter`
-- TypeScript: `tree-sitter`
+- Java: `JavaParser`
+- JavaScript: `@babel/parser`
+- TypeScript: `ts-morph`
 
-These analyzers extract classes, methods, constructors, and method bodies from syntax trees rather than from regex-only text scans. The metrics still follow notebook-style intent, but they are not full compiler or type-checker implementations.
+These analyzers extract classes, methods, constructors, and method bodies from language-native syntax trees rather than from regex-only text scans. The metrics still follow notebook-style intent, but they are not full compiler or type-checker implementations.
 
 ## Class And Method Metrics
 
