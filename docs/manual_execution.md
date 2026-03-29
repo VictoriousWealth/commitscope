@@ -17,6 +17,10 @@ This is the exact manual-only flow for running CommitScope in the dev AWS enviro
 
 ## What The Pipeline Writes
 
+The pipeline writes these output categories to S3.
+
+Important behavior: each new cloud execution clears the previous `raw/`, `processed/`, and `curated/` objects before uploading the new repo snapshot. The QuickSight dashboard is therefore intended to show the latest run by default rather than accumulate multiple repos unless you change the pipeline behavior again.
+
 The pipeline writes these output categories to S3:
 
 - Raw commit payloads:
