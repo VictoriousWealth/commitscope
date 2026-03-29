@@ -22,6 +22,7 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+npm install
 ```
 
 Run the pipeline with the example config:
@@ -61,7 +62,7 @@ examples/                Example config
 
 ## Metric Notes
 
-The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python, Java, JavaScript, and TypeScript all use AST-backed structural analysis. Higher-level metrics such as `FANIN`, `FANOUT`, `CBO`, `RFC`, and `LCOM` still remain static approximations rather than full compiler-grade semantic resolution.
+The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python uses the built-in `ast`, Java uses `JavaParser`, JavaScript uses `@babel/parser`, and TypeScript uses `ts-morph`. Higher-level metrics such as `FANIN`, `FANOUT`, `CBO`, `RFC`, and `LCOM` still remain static approximations rather than full compiler-grade semantic resolution.
 
 ## Test Status
 
