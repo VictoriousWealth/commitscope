@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -8,12 +9,24 @@ from commitscope.config import AppConfig
 from commitscope.git.repository import clone_or_update_repository, checkout_commit, repo_name_from_url, restore_branch, select_commits
 from commitscope.reporting.manifest import write_runtime_manifest
 from commitscope.reporting.reporting import write_reporting_artifacts
-from commitscope.storage.s3 import upload_directory_to_s3
+from commitscope.storage.s3 import delete_prefixes_from_s3, upload_directory_to_s3
 from commitscope.storage.writers import write_processed_outputs, write_raw_commit_payload
 from commitscope.utils.fs import ensure_dir
 
 
 def run_pipeline(config: AppConfig) -> dict[str, Path]:
+    _reset_output_root(Path(config.output_root))
+    if config.storage.write_s3:
+        delete_prefixes_from_s3(
+            config.storage.s3_bucket,
+            [
+                config.storage.prefixes.raw,
+                config.storage.prefixes.processed,
+                config.storage.prefixes.curated,
+            ],
+            config.aws_region,
+        )
+
     repo_path = clone_or_update_repository(config.repo)
     commits = select_commits(repo_path, config.repo)
     repo_name = repo_name_from_url(config.repo.url)
@@ -75,3 +88,9 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
     if config.storage.write_s3:
         upload_directory_to_s3(config.output_root, config.storage.s3_bucket, "", config.aws_region)
     return outputs
+
+
+def _reset_output_root(output_root: Path) -> None:
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    ensure_dir(output_root)
