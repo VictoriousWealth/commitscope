@@ -107,6 +107,113 @@ def test_python_module_alias_resolution_tracks_cross_module_calls() -> None:
         assert consumer_class["cbo"] == 1
 
 
+def test_python_parameter_annotation_resolution_tracks_method_calls() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        package = repo_root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "service.py").write_text(
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n",
+            encoding="utf-8",
+        )
+        (package / "consumer.py").write_text(
+            "from pkg.service import Service\n"
+            "class Consumer:\n"
+            "    def use(self, service: Service):\n"
+            "        return service.run()\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "pkg/service.py.Service.run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "pkg/consumer.py.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
+def test_python_inherited_method_resolution_counts_base_method_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        package = repo_root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "base.py").write_text(
+            "class Base:\n"
+            "    def run(self):\n"
+            "        return 1\n",
+            encoding="utf-8",
+        )
+        (package / "child.py").write_text(
+            "from pkg.base import Base\n"
+            "class Child(Base):\n"
+            "    def use(self):\n"
+            "        return self.run()\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        base_run = next(row for row in result.method_metrics if row["method_name"] == "pkg/base.py.Base.run")
+        child_class = next(row for row in result.class_metrics if row["class_name"] == "pkg/child.py.Child")
+
+        assert base_run["fanin"] == 1
+        assert child_class["cbo"] == 1
+
+
+def test_python_return_annotation_resolution_supports_chained_calls() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        package = repo_root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "service.py").write_text(
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n",
+            encoding="utf-8",
+        )
+        (package / "controller.py").write_text(
+            "from pkg.service import Service\n"
+            "class Controller:\n"
+            "    def make_service(self) -> Service:\n"
+            "        return Service()\n"
+            "    def work(self):\n"
+            "        return self.make_service().run()\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "pkg/service.py.Service.run")
+        controller_class = next(row for row in result.class_metrics if row["class_name"] == "pkg/controller.py.Controller")
+
+        assert service_run["fanin"] == 1
+        assert controller_class["cbo"] == 1
+
+
 def test_java_metrics_are_generated_for_simple_class() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
