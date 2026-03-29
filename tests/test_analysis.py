@@ -32,6 +32,81 @@ def test_python_metrics_are_generated_for_simple_class() -> None:
         assert result.commit_summary["total_classes"] == 1
 
 
+def test_python_cross_module_constructor_and_method_resolution_updates_fanin_and_cbo() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        package = repo_root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "service.py").write_text(
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n",
+            encoding="utf-8",
+        )
+        (package / "controller.py").write_text(
+            "from pkg.service import Service\n"
+            "class Controller:\n"
+            "    def __init__(self):\n"
+            "        self.service = Service()\n"
+            "    def work(self):\n"
+            "        return self.service.run()\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_class = next(row for row in result.class_metrics if row["class_name"] == "pkg/service.py.Service")
+        controller_class = next(row for row in result.class_metrics if row["class_name"] == "pkg/controller.py.Controller")
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "pkg/service.py.Service.run")
+
+        assert service_class["fanin"] == 1
+        assert controller_class["cbo"] == 1
+        assert service_run["fanin"] == 1
+
+
+def test_python_module_alias_resolution_tracks_cross_module_calls() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        package = repo_root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "service.py").write_text(
+            "class Service:\n"
+            "    def ping(self):\n"
+            "        return 1\n",
+            encoding="utf-8",
+        )
+        (package / "consumer.py").write_text(
+            "import pkg.service as service_mod\n"
+            "class Consumer:\n"
+            "    def use(self):\n"
+            "        svc = service_mod.Service()\n"
+            "        return svc.ping()\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_ping = next(row for row in result.method_metrics if row["method_name"] == "pkg/service.py.Service.ping")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "pkg/consumer.py.Consumer")
+
+        assert service_ping["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
 def test_java_metrics_are_generated_for_simple_class() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
