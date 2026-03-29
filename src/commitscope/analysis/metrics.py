@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
 import re
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-import javalang
-from javalang.tokenizer import LexerError
 from tree_sitter import Language, Parser
 import tree_sitter_javascript
 import tree_sitter_typescript
@@ -27,6 +28,13 @@ JAVA_LANGUAGE = "java"
 JAVASCRIPT_LANGUAGE = "javascript"
 TYPESCRIPT_LANGUAGE = "typescript"
 SUPPORTED_C_STYLE_LANGUAGES = {JAVASCRIPT_LANGUAGE, TYPESCRIPT_LANGUAGE}
+REPO_ROOT = Path(__file__).resolve().parents[3]
+NODE_AST_HELPER = REPO_ROOT / "scripts" / "js_ts_ast_metrics.cjs"
+JAVA_HELPER_SOURCE = REPO_ROOT / "tools" / "java" / "src" / "JavaMetricsMain.java"
+JAVA_HELPER_BIN = REPO_ROOT / "tools" / "java" / "bin"
+JAVA_HELPER_MAIN = "JavaMetricsMain"
+JAVA_PARSER_JAR = REPO_ROOT / "tools" / "java" / "lib" / "javaparser-core-3.27.1.jar"
+ARG_SEPARATOR = "\x1f"
 TREE_SITTER_LANGUAGES = {
     JAVASCRIPT_LANGUAGE: Language(tree_sitter_javascript.language()),
     TYPESCRIPT_LANGUAGE: Language(tree_sitter_typescript.language_typescript()),
@@ -258,21 +266,9 @@ class JavaAnalyzer:
         self.relative_path = relative_path
         self.source = source
         self.known_class_names = known_class_names
-        self._line_offsets = self._build_line_offsets(source)
 
     def analyze(self) -> tuple[list[dict], list[dict]]:
-        try:
-            tree = javalang.parse.parse(self.source)
-        except (javalang.parser.JavaSyntaxError, IndexError, TypeError, StopIteration, LexerError):
-            return [], []
-
-        classes: list[TextClass] = []
-        for _, node in tree.filter(javalang.tree.ClassDeclaration):
-            qualified = f"{self.relative_path}.{node.name}"
-            methods: list[TextMethod] = []
-            for method in list(node.methods) + list(node.constructors):
-                methods.append(self._build_method(node.name, qualified, method))
-            classes.append(TextClass(class_name=qualified, language=JAVA_LANGUAGE, methods=methods))
+        classes = _run_java_helper(self.relative_path, self.source, self.known_class_names)
         return self._rows_from_classes(classes)
 
     def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
@@ -325,66 +321,78 @@ class JavaAnalyzer:
                 )
         return class_rows, method_rows
 
-    def _build_method(
-        self,
-        class_name: str,
-        qualified_class_name: str,
-        method: javalang.tree.MethodDeclaration | javalang.tree.ConstructorDeclaration,
-    ) -> TextMethod:
-        method_simple_name = method.name
-        snippet = self._node_snippet(method)
-        loc = snippet.count("\n") + 1 if snippet else max(len(method.body or []) + 1, 1)
-        lines = [line for line in snippet.splitlines() if line.strip()]
-        invocations = [node for _, node in method if isinstance(node, javalang.tree.MethodInvocation)]
-        references = [node for _, node in method if isinstance(node, javalang.tree.ReferenceType)]
-        cc = 1 + sum(
-            1
-            for _, node in method
-            if isinstance(
-                node,
-                (
-                    javalang.tree.IfStatement,
-                    javalang.tree.ForStatement,
-                    javalang.tree.WhileStatement,
-                    javalang.tree.DoStatement,
-                    javalang.tree.SwitchStatementCase,
-                    javalang.tree.CatchClause,
-                    javalang.tree.TernaryExpression,
-                ),
-            )
-        )
-        cc += len(re.findall(r"&&|\|\|", snippet))
-        return TextMethod(
-            class_name=qualified_class_name,
-            method_name=f"{qualified_class_name}.{method_simple_name}",
-            method_simple_name=method_simple_name,
-            language=JAVA_LANGUAGE,
-            body=snippet,
-            loc=loc,
-            lloc=len(lines) or 1,
-            parameters=len(method.parameters),
-            fanout=len(invocations),
-            cc=cc,
-            instance_vars=set(re.findall(r"\bthis\.([A-Za-z_]\w*)", snippet)),
-            direct_calls={node.member for node in invocations if node.member},
-            class_refs={
-                f"{self.relative_path}.{node.name}"
-                for node in references
-                if getattr(node, "name", None) in self.known_class_names
-            },
-        )
+    def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
+        methods = list(method_access)
+        pairs = [(left, right) for index, left in enumerate(methods) for right in methods[index + 1 :]]
+        p = 0
+        q = 0
+        for left, right in pairs:
+            if method_access[left] & method_access[right]:
+                q += 1
+            else:
+                p += 1
+        return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
 
-    def _node_snippet(self, method: javalang.tree.MethodDeclaration | javalang.tree.ConstructorDeclaration) -> str:
-        if method.position is None:
-            return ""
-        line_start_index = self._line_offsets[method.position.line - 1]
-        open_brace = self.source.find("{", line_start_index)
-        if open_brace == -1:
-            return ""
-        close_brace = _find_matching_brace(self.source, open_brace)
-        if close_brace == -1:
-            return ""
-        return self.source[line_start_index : close_brace + 1]
+class JavaScriptAnalyzer:
+    def __init__(self, language: str, relative_path: str, source: str, known_class_names: set[str]) -> None:
+        self.language = language
+        self.relative_path = relative_path
+        self.source = source
+        self.known_class_names = known_class_names
+
+    def analyze(self) -> tuple[list[dict], list[dict]]:
+        classes = _run_node_helper(self.language, self.relative_path, self.source, self.known_class_names)
+        return self._rows_from_classes(classes)
+
+    def _rows_from_classes(self, classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
+        method_callers: dict[str, set[str]] = defaultdict(set)
+        class_fanin_sources: dict[str, set[str]] = defaultdict(set)
+        method_index = {
+            method.method_simple_name: [candidate for candidate in text_class.methods if candidate.method_simple_name == method.method_simple_name]
+            for text_class in classes
+            for method in text_class.methods
+        }
+
+        for text_class in classes:
+            for method in text_class.methods:
+                caller = method.method_name
+                for target in method.direct_calls:
+                    for candidate in method_index.get(target, []):
+                        if candidate.method_name != caller:
+                            method_callers[candidate.method_name].add(caller)
+                            class_fanin_sources[candidate.class_name].add(method.class_name)
+
+        class_rows: list[dict] = []
+        method_rows: list[dict] = []
+        for text_class in classes:
+            lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
+            class_rows.append(
+                {
+                    "class_name": text_class.class_name,
+                    "wmc": sum(method.cc for method in text_class.methods),
+                    "lcom": self._compute_lcom(lcom_sources),
+                    "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
+                    "fanout": sum(method.fanout for method in text_class.methods),
+                    "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
+                    "rfc": len({method.method_simple_name for method in text_class.methods}) + len({call for method in text_class.methods for call in method.direct_calls}),
+                    "language": text_class.language,
+                }
+            )
+            for method in text_class.methods:
+                method_rows.append(
+                    {
+                        "class_name": text_class.class_name,
+                        "method_name": method.method_name,
+                        "cc": method.cc,
+                        "loc": method.loc,
+                        "lloc": method.lloc,
+                        "parameters": method.parameters,
+                        "fanin": len(method_callers.get(method.method_name, set())),
+                        "fanout": method.fanout,
+                        "language": method.language,
+                    }
+                )
+        return class_rows, method_rows
 
     def _compute_lcom(self, method_access: dict[str, set[str]]) -> float:
         methods = list(method_access)
@@ -398,16 +406,12 @@ class JavaAnalyzer:
                 p += 1
         return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
 
-    def _build_line_offsets(self, source: str) -> list[int]:
-        offsets = [0]
-        running = 0
-        for line in source.splitlines(keepends=True):
-            running += len(line)
-            offsets.append(running)
-        return offsets
+
+class TypeScriptAnalyzer(JavaScriptAnalyzer):
+    pass
 
 
-class JsTsAnalyzer:
+class TreeSitterAnalyzer:
     def __init__(self, language: str, relative_path: str, source: str, known_class_names: set[str]) -> None:
         self.language = language
         self.relative_path = relative_path
@@ -765,6 +769,110 @@ class CStyleAnalyzer:
         return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
 
 
+def _run_java_helper(relative_path: str, source: str, known_class_names: set[str]) -> list[TextClass]:
+    _ensure_java_helper_compiled()
+    result = subprocess.run(
+        [
+            "java",
+            "-cp",
+            os.pathsep.join([str(JAVA_HELPER_BIN), str(JAVA_PARSER_JAR)]),
+            JAVA_HELPER_MAIN,
+            relative_path,
+            ARG_SEPARATOR.join(sorted(known_class_names)),
+        ],
+        input=source,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return _decode_helper_classes(result.stdout)
+
+
+def _ensure_java_helper_compiled() -> None:
+    if not JAVA_PARSER_JAR.exists():
+        java_lib_dir = JAVA_PARSER_JAR.parent
+        java_lib_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "mvn",
+                "dependency:copy",
+                "-Dartifact=com.github.javaparser:javaparser-core:3.27.1",
+                f"-DoutputDirectory={java_lib_dir}",
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    class_file = JAVA_HELPER_BIN / f"{JAVA_HELPER_MAIN}.class"
+    if class_file.exists() and class_file.stat().st_mtime >= JAVA_HELPER_SOURCE.stat().st_mtime:
+        return
+    JAVA_HELPER_BIN.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "javac",
+            "-cp",
+            str(JAVA_PARSER_JAR),
+            "-d",
+            str(JAVA_HELPER_BIN),
+            str(JAVA_HELPER_SOURCE),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+
+def _run_node_helper(language: str, relative_path: str, source: str, known_class_names: set[str]) -> list[TextClass]:
+    result = subprocess.run(
+        [
+            "node",
+            str(NODE_AST_HELPER),
+            language,
+            relative_path,
+            ARG_SEPARATOR.join(sorted(known_class_names)),
+        ],
+        input=source,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return _decode_helper_classes(result.stdout)
+
+
+def _decode_helper_classes(raw_output: str) -> list[TextClass]:
+    if not raw_output.strip():
+        return []
+    payload = json.loads(raw_output)
+    classes: list[TextClass] = []
+    for class_payload in payload:
+        methods = [
+            TextMethod(
+                class_name=method_payload["class_name"],
+                method_name=method_payload["method_name"],
+                method_simple_name=method_payload["method_simple_name"],
+                language=method_payload["language"],
+                body=method_payload["body"],
+                loc=method_payload["loc"],
+                lloc=method_payload["lloc"],
+                parameters=method_payload["parameters"],
+                fanout=method_payload["fanout"],
+                cc=method_payload["cc"],
+                instance_vars=set(method_payload["instance_vars"]),
+                direct_calls=set(method_payload["direct_calls"]),
+                class_refs=set(method_payload["class_refs"]),
+            )
+            for method_payload in class_payload["methods"]
+        ]
+        classes.append(
+            TextClass(
+                class_name=class_payload["class_name"],
+                language=class_payload["language"],
+                methods=methods,
+            )
+        )
+    return classes
+
+
 def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: str, branch: str, commit_date: str) -> AnalysisResult:
     python_trees: dict[str, ast.AST] = {}
     text_sources: dict[str, tuple[str, str]] = {}
@@ -819,8 +927,12 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
         analyzer = (
             JavaAnalyzer(relative_path=relative, source=source, known_class_names=known_text_class_names)
             if language == JAVA_LANGUAGE
-            else JsTsAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
-            if language in SUPPORTED_C_STYLE_LANGUAGES
+            else JavaScriptAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language == JAVASCRIPT_LANGUAGE
+            else TypeScriptAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language == TYPESCRIPT_LANGUAGE
+            else TreeSitterAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
+            if language in TREE_SITTER_LANGUAGES
             else CStyleAnalyzer(language=language, relative_path=relative, source=source, known_class_names=known_text_class_names)
         )
         module_classes, module_methods = analyzer.analyze()
