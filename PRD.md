@@ -62,7 +62,7 @@ examples/                Example config
 
 ## Metric Notes
 
-The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python uses the built-in `ast`, Java uses `JavaParser`, JavaScript uses `@babel/parser`, and TypeScript uses `ts-morph`. Higher-level metrics such as `FANIN`, `FANOUT`, `CBO`, `RFC`, and `LCOM` still remain static approximations rather than full compiler-grade semantic resolution.
+The metric semantics intentionally follow the notebooks in [docs/metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md). Python uses the built-in `ast`, Java uses `JavaParser`, JavaScript uses `@babel/parser`, TypeScript uses `ts-morph`, and Go/Rust/C# use language-specific `tree-sitter` grammars for structural extraction. Higher-level metrics such as `FANIN`, `FANOUT`, `CBO`, `RFC`, and `LCOM` still remain static approximations rather than full compiler-grade semantic resolution.
 
 ## Test Status
 
