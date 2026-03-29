@@ -94,11 +94,11 @@ The cloud path is:
 1. Step Functions execution starts with the config payload from `commitscope.main dispatch`
 2. Lambda prepare step receives `config_json` and turns it into ECS container overrides
 3. ECS Fargate task runs `python -m commitscope.aws.container`
-4. the pipeline clones the target public GitHub repo, analyses the configured commit range, and writes:
+4. the pipeline clears the previous `raw/`, `processed/`, and `curated/` objects, then clones the target public GitHub repo, analyses the configured commit range, and writes:
    - `raw/`
    - `processed/`
    - `curated/`
-5. the state machine starts the Glue crawler so partitions refresh after a successful run
+5. the state machine starts the Glue crawler so partitions refresh after a successful run and deleted partitions are removed from Glue
 6. Athena queries the Parquet written under `processed/`
 7. QuickSight uses Athena-backed direct-query datasets and dashboards provisioned from the repo helper
 
