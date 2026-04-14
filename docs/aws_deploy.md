@@ -107,7 +107,7 @@ The cloud path is:
 First generate the Step Functions payload:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
+.venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
 ```
 
 Then start the execution:
