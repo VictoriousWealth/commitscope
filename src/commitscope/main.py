@@ -52,9 +52,27 @@ def _load_local_tables(config: object) -> dict[str, list[dict]]:
     processed_root = Path(config.output_root) / "processed"
     tables: dict[str, list[dict]] = {}
     for table_name in ("commit_summary", "class_metrics"):
-        csv_path = processed_root / table_name / f"{table_name}.csv"
-        tables[table_name] = pd.read_csv(csv_path).to_dict(orient="records") if csv_path.exists() else []
+        table_root = processed_root / table_name
+        tables[table_name] = _load_local_table(table_root, table_name)
     return tables
+
+
+def _load_local_table(table_root: Path, table_name: str) -> list[dict]:
+    csv_path = table_root / f"{table_name}.csv"
+    if csv_path.exists():
+        return pd.read_csv(csv_path).to_dict(orient="records")
+
+    json_path = table_root / f"{table_name}.json"
+    if json_path.exists():
+        return pd.read_json(json_path).to_dict(orient="records")
+
+    parquet_paths = sorted(table_root.rglob("*.parquet"))
+    if parquet_paths:
+        frames = [pd.read_parquet(path) for path in parquet_paths]
+        if frames:
+            return pd.concat(frames, ignore_index=True).to_dict(orient="records")
+
+    return []
 
 
 if __name__ == "__main__":
