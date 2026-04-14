@@ -204,12 +204,11 @@ def ensure_data_set(
     ]
     physical_table_map = {
         spec.quicksight_table_id: {
-            "RelationalTable": {
+            "CustomSql": {
                 "DataSourceArn": data_source_arn,
-                "Catalog": "AwsDataCatalog",
-                "Schema": database,
-                "Name": spec.table_name,
-                "InputColumns": input_columns,
+                "Name": spec.name,
+                "SqlQuery": build_latest_scope_sql(database, spec.table_name),
+                "Columns": input_columns,
             }
         }
     }
@@ -244,6 +243,28 @@ def ensure_data_set(
             Permissions=permissions,
         )
         return response["Arn"]
+
+
+def build_latest_scope_sql(database: str, table_name: str) -> str:
+    latest_scope = f"""
+WITH latest_scope AS (
+    SELECT repo, branch
+    FROM {database}.commit_summary
+    GROUP BY repo, branch
+    ORDER BY max(commit_date) DESC, repo DESC, branch DESC
+    LIMIT 1
+)
+""".strip()
+    return (
+        latest_scope
+        + f"""
+SELECT t.*
+FROM {database}.{table_name} AS t
+JOIN latest_scope AS latest
+  ON t.repo = latest.repo
+ AND t.branch = latest.branch
+""".rstrip()
+    )
 
 
 def ensure_analysis(
