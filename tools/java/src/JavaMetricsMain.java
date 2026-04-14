@@ -3,11 +3,13 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.BinaryExpr;
 import com.github.javaparser.ast.expr.ConditionalExpr;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.ThisExpr;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.DoStmt;
@@ -20,23 +22,21 @@ import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class JavaMetricsMain {
     private static final String ARG_SEPARATOR = "\u001f";
+    private static final String CLASS_NAME_SEPARATOR = "\u001e";
+    private static final String CLASS_LIST_SEPARATOR = "\u001d";
 
     public static void main(String[] args) throws Exception {
         String relativePath = args.length > 0 ? args[0] : "";
-        Set<String> knownClassNames = new HashSet<>();
-        if (args.length > 1 && !args[1].isBlank()) {
-            for (String name : args[1].split(ARG_SEPARATOR)) {
-                if (!name.isBlank()) {
-                    knownClassNames.add(name);
-                }
-            }
-        }
+        Map<String, List<String>> knownClasses = parseKnownClasses(args.length > 1 ? args[1] : "");
+        Set<String> knownClassNames = knownClasses.keySet();
         String source = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
         CompilationUnit compilationUnit = StaticJavaParser.parse(source);
         List<String> lines = source.lines().toList();
@@ -58,14 +58,14 @@ public class JavaMetricsMain {
                     output.append(",");
                 }
                 firstMethod = false;
-                output.append(renderMethod(lines, relativePath, qualifiedClassName, constructor.getNameAsString(), constructor, constructor, knownClassNames));
+                output.append(renderMethod(lines, relativePath, qualifiedClassName, constructor.getNameAsString(), constructor, constructor, knownClasses));
             }
             for (MethodDeclaration method : declaration.getMethods()) {
                 if (!firstMethod) {
                     output.append(",");
                 }
                 firstMethod = false;
-                output.append(renderMethod(lines, relativePath, qualifiedClassName, method.getNameAsString(), method, method, knownClassNames));
+                output.append(renderMethod(lines, relativePath, qualifiedClassName, method.getNameAsString(), method, method, knownClasses));
             }
             output.append("]}");
         }
@@ -80,7 +80,7 @@ public class JavaMetricsMain {
         String methodSimpleName,
         com.github.javaparser.ast.Node rangeNode,
         com.github.javaparser.ast.Node traversalNode,
-        Set<String> knownClassNames
+        Map<String, List<String>> knownClasses
     ) {
         String snippet = snippetFor(lines, rangeNode);
         String bodyText = snippet;
@@ -89,6 +89,14 @@ public class JavaMetricsMain {
             parameters = method.getParameters().size();
         } else if (traversalNode instanceof ConstructorDeclaration constructor) {
             parameters = constructor.getParameters().size();
+        }
+
+        Map<String, String> localVarTypes = new HashMap<>();
+        for (VariableDeclarator declarator : traversalNode.findAll(VariableDeclarator.class)) {
+            String inferredType = inferVariableType(declarator, knownClasses);
+            if (inferredType != null) {
+                localVarTypes.put(declarator.getNameAsString(), inferredType);
+            }
         }
 
         Set<String> instanceVars = new HashSet<>();
@@ -102,20 +110,23 @@ public class JavaMetricsMain {
         int fanout = 0;
         for (MethodCallExpr expr : traversalNode.findAll(MethodCallExpr.class)) {
             fanout += 1;
-            directCalls.add(expr.getNameAsString());
+            String target = resolveMethodTarget(expr, qualifiedClassName, localVarTypes, knownClasses);
+            directCalls.add(target != null ? target : expr.getNameAsString());
         }
 
         Set<String> classRefs = new HashSet<>();
         for (ClassOrInterfaceType type : traversalNode.findAll(ClassOrInterfaceType.class)) {
             String name = type.getNameAsString();
-            if (knownClassNames.contains(name)) {
-                classRefs.add(relativePath + "." + name);
+            String qualifiedRef = uniqueQualifiedClass(name, knownClasses);
+            if (qualifiedRef != null) {
+                classRefs.add(qualifiedRef);
             }
         }
         for (NameExpr expr : traversalNode.findAll(NameExpr.class)) {
             String name = expr.getNameAsString();
-            if (knownClassNames.contains(name)) {
-                classRefs.add(relativePath + "." + name);
+            String qualifiedRef = uniqueQualifiedClass(name, knownClasses);
+            if (qualifiedRef != null) {
+                classRefs.add(qualifiedRef);
             }
         }
 
@@ -160,6 +171,76 @@ public class JavaMetricsMain {
             + "\"direct_calls\":" + renderArray(new ArrayList<>(directCalls)) + ","
             + "\"class_refs\":" + renderArray(new ArrayList<>(classRefs))
             + "}";
+    }
+
+    private static Map<String, List<String>> parseKnownClasses(String raw) {
+        Map<String, List<String>> knownClasses = new HashMap<>();
+        if (raw == null || raw.isBlank()) {
+            return knownClasses;
+        }
+        for (String entry : raw.split(ARG_SEPARATOR)) {
+            if (entry.isBlank()) {
+                continue;
+            }
+            String[] parts = entry.split(CLASS_NAME_SEPARATOR, 2);
+            String className = parts[0];
+            List<String> qualifiedNames = new ArrayList<>();
+            if (parts.length > 1 && !parts[1].isBlank()) {
+                for (String qualifiedName : parts[1].split(CLASS_LIST_SEPARATOR)) {
+                    if (!qualifiedName.isBlank()) {
+                        qualifiedNames.add(qualifiedName);
+                    }
+                }
+            }
+            knownClasses.put(className, qualifiedNames);
+        }
+        return knownClasses;
+    }
+
+    private static String uniqueQualifiedClass(String className, Map<String, List<String>> knownClasses) {
+        List<String> matches = knownClasses.get(className);
+        if (matches == null || matches.size() != 1) {
+            return null;
+        }
+        return matches.get(0);
+    }
+
+    private static String inferVariableType(VariableDeclarator declarator, Map<String, List<String>> knownClasses) {
+        if (declarator.getInitializer().isPresent() && declarator.getInitializer().get() instanceof ObjectCreationExpr created) {
+            return created.getType().getNameAsString();
+        }
+        String declaredType = declarator.getType().asString();
+        return uniqueQualifiedClass(declaredType, knownClasses) != null ? declaredType : null;
+    }
+
+    private static String resolveMethodTarget(
+        MethodCallExpr expr,
+        String qualifiedClassName,
+        Map<String, String> localVarTypes,
+        Map<String, List<String>> knownClasses
+    ) {
+        String methodName = expr.getNameAsString();
+        if (expr.getScope().isEmpty()) {
+            return qualifiedClassName + "." + methodName;
+        }
+        com.github.javaparser.ast.expr.Expression scope = expr.getScope().get();
+        if (scope instanceof ThisExpr) {
+            return qualifiedClassName + "." + methodName;
+        }
+        if (scope instanceof NameExpr namedScope) {
+            String localType = localVarTypes.get(namedScope.getNameAsString());
+            if (localType != null) {
+                String qualifiedOwner = uniqueQualifiedClass(localType, knownClasses);
+                if (qualifiedOwner != null) {
+                    return qualifiedOwner + "." + methodName;
+                }
+            }
+            String staticOwner = uniqueQualifiedClass(namedScope.getNameAsString(), knownClasses);
+            if (staticOwner != null) {
+                return staticOwner + "." + methodName;
+            }
+        }
+        return methodName;
     }
 
     private static String snippetFor(List<String> lines, com.github.javaparser.ast.Node node) {
