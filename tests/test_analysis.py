@@ -288,6 +288,72 @@ def test_javascript_class_field_arrow_function_is_treated_as_method() -> None:
         assert any(row["method_name"] == "sample.js.Sample.first" for row in result.method_metrics)
 
 
+def test_non_python_fanin_does_not_match_multiple_same_named_methods() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "first.js").write_text(
+            "class First {\n"
+            "  run() {\n"
+            "    return 1;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "second.js").write_text(
+            "class Second {\n"
+            "  run() {\n"
+            "    return 2;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "caller.js").write_text(
+            "class Caller {\n"
+            "  work() {\n"
+            "    return run();\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        first_run = next(row for row in result.method_metrics if row["method_name"] == "first.js.First.run")
+        second_run = next(row for row in result.method_metrics if row["method_name"] == "second.js.Second.run")
+
+        assert first_run["fanin"] == 0
+        assert second_run["fanin"] == 0
+
+
+def test_commit_summary_total_loc_uses_file_totals() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "sample.py").write_text(
+            "import os\n"
+            "\n"
+            "class Sample:\n"
+            "    def run(self):\n"
+            "        return 1\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        assert result.commit_summary["total_loc"] == 5
+
+
 def test_typescript_metrics_are_generated_for_simple_class() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
@@ -657,11 +723,8 @@ def test_total_loc_does_not_double_count_python_or_c_style_methods() -> None:
             commit_date="2026-03-21",
         )
 
-        method_loc_total = sum(row["loc"] for row in result.method_metrics)
-        other_file_loc_total = sum(
-            row["loc"] for row in result.file_metrics if row["language"] not in {"python", "java", "javascript", "typescript"}
-        )
-        assert result.commit_summary["total_loc"] == method_loc_total + other_file_loc_total
+        file_loc_total = sum(row["loc"] for row in result.file_metrics)
+        assert result.commit_summary["total_loc"] == file_loc_total
 
 
 def test_find_matching_brace_handles_nested_blocks() -> None:
