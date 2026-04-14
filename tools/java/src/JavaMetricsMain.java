@@ -1,5 +1,6 @@
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
@@ -39,6 +40,7 @@ public class JavaMetricsMain {
         Set<String> knownClassNames = knownClasses.keySet();
         String source = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
         CompilationUnit compilationUnit = StaticJavaParser.parse(source);
+        Map<String, String> staticImportedMethods = collectStaticImportedMethods(compilationUnit, knownClasses);
         List<String> lines = source.lines().toList();
         StringBuilder output = new StringBuilder("[");
         boolean firstClass = true;
@@ -58,14 +60,14 @@ public class JavaMetricsMain {
                     output.append(",");
                 }
                 firstMethod = false;
-                output.append(renderMethod(lines, relativePath, qualifiedClassName, constructor.getNameAsString(), constructor, constructor, knownClasses));
+                output.append(renderMethod(lines, relativePath, qualifiedClassName, constructor.getNameAsString(), constructor, constructor, knownClasses, staticImportedMethods));
             }
             for (MethodDeclaration method : declaration.getMethods()) {
                 if (!firstMethod) {
                     output.append(",");
                 }
                 firstMethod = false;
-                output.append(renderMethod(lines, relativePath, qualifiedClassName, method.getNameAsString(), method, method, knownClasses));
+                output.append(renderMethod(lines, relativePath, qualifiedClassName, method.getNameAsString(), method, method, knownClasses, staticImportedMethods));
             }
             output.append("]}");
         }
@@ -80,7 +82,8 @@ public class JavaMetricsMain {
         String methodSimpleName,
         com.github.javaparser.ast.Node rangeNode,
         com.github.javaparser.ast.Node traversalNode,
-        Map<String, List<String>> knownClasses
+        Map<String, List<String>> knownClasses,
+        Map<String, String> staticImportedMethods
     ) {
         String snippet = snippetFor(lines, rangeNode);
         String bodyText = snippet;
@@ -110,7 +113,7 @@ public class JavaMetricsMain {
         int fanout = 0;
         for (MethodCallExpr expr : traversalNode.findAll(MethodCallExpr.class)) {
             fanout += 1;
-            String target = resolveMethodTarget(expr, qualifiedClassName, localVarTypes, knownClasses);
+            String target = resolveMethodTarget(expr, qualifiedClassName, localVarTypes, knownClasses, staticImportedMethods);
             directCalls.add(target != null ? target : expr.getNameAsString());
         }
 
@@ -217,10 +220,15 @@ public class JavaMetricsMain {
         MethodCallExpr expr,
         String qualifiedClassName,
         Map<String, String> localVarTypes,
-        Map<String, List<String>> knownClasses
+        Map<String, List<String>> knownClasses,
+        Map<String, String> staticImportedMethods
     ) {
         String methodName = expr.getNameAsString();
         if (expr.getScope().isEmpty()) {
+            String staticImportOwner = staticImportedMethods.get(methodName);
+            if (staticImportOwner != null) {
+                return staticImportOwner + "." + methodName;
+            }
             return qualifiedClassName + "." + methodName;
         }
         com.github.javaparser.ast.expr.Expression scope = expr.getScope().get();
@@ -241,6 +249,27 @@ public class JavaMetricsMain {
             }
         }
         return methodName;
+    }
+
+    private static Map<String, String> collectStaticImportedMethods(CompilationUnit compilationUnit, Map<String, List<String>> knownClasses) {
+        Map<String, String> staticImportedMethods = new HashMap<>();
+        for (ImportDeclaration importDeclaration : compilationUnit.getImports()) {
+            if (!importDeclaration.isStatic()) {
+                continue;
+            }
+            String importName = importDeclaration.getNameAsString();
+            int separator = importName.lastIndexOf('.');
+            if (separator == -1) {
+                continue;
+            }
+            String ownerSimpleName = importName.substring(Math.max(importName.lastIndexOf('.', separator - 1) + 1, 0), separator);
+            String methodName = importName.substring(separator + 1);
+            String qualifiedOwner = uniqueQualifiedClass(ownerSimpleName, knownClasses);
+            if (qualifiedOwner != null) {
+                staticImportedMethods.put(methodName, qualifiedOwner);
+            }
+        }
+        return staticImportedMethods;
     }
 
     private static String snippetFor(List<String> lines, com.github.javaparser.ast.Node node) {
