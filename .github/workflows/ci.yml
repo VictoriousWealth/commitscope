@@ -30,7 +30,7 @@ jobs:
       - name: Compile package
         run: |
           . .venv/bin/activate
-          PYTHONPATH=src python -m compileall src
+          .venv/bin/python -m compileall src
 
   terraform-plan:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
