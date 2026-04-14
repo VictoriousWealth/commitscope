@@ -450,19 +450,25 @@ def _rows_from_text_classes(classes: list[TextClass]) -> tuple[list[dict], list[
     method_callers: dict[str, set[str]] = defaultdict(set)
     class_fanin_sources: dict[str, set[str]] = defaultdict(set)
     method_index: dict[str, list[TextMethod]] = defaultdict(list)
+    methods_by_name_and_class: dict[tuple[str, str], TextMethod] = {}
 
     for text_class in classes:
         for method in text_class.methods:
             method_index[method.method_simple_name].append(method)
+            methods_by_name_and_class[(method.class_name, method.method_simple_name)] = method
 
     for text_class in classes:
         for method in text_class.methods:
             caller = method.method_name
             for target in method.direct_calls:
-                for candidate in method_index.get(target, []):
-                    if candidate.method_name != caller:
-                        method_callers[candidate.method_name].add(caller)
-                        class_fanin_sources[candidate.class_name].add(method.class_name)
+                candidate = methods_by_name_and_class.get((text_class.class_name, target))
+                if candidate is None:
+                    global_candidates = method_index.get(target, [])
+                    candidate = global_candidates[0] if len(global_candidates) == 1 else None
+                if candidate is None or candidate.method_name == caller:
+                    continue
+                method_callers[candidate.method_name].add(caller)
+                class_fanin_sources[candidate.class_name].add(method.class_name)
 
     class_rows: list[dict] = []
     method_rows: list[dict] = []
@@ -1413,7 +1419,7 @@ def analyze_repository_snapshot(repo_root: Path, commit_hash: str, repo_name: st
         "avg_wmc": _average([row["wmc"] for row in class_rows]),
         "avg_lcom": _average([row["lcom"] for row in class_rows]),
         "max_cc": max((row["cc"] for row in method_rows), default=0),
-        "total_loc": sum(row["loc"] for row in method_rows) + sum(row["loc"] for row in file_metrics if row["language"] not in analyzed_method_languages),
+        "total_loc": sum(row["loc"] for row in file_metrics),
         "total_files": len(file_metrics),
         "python_files": sum(1 for row in file_metrics if row["language"] == "python"),
         "non_python_files": sum(1 for row in file_metrics if row["language"] != "python"),
