@@ -391,6 +391,43 @@ def test_javascript_cross_file_constructor_and_method_resolution_updates_fanin()
         assert consumer_class["cbo"] == 1
 
 
+def test_typescript_cross_file_import_alias_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "service.ts").write_text(
+            "export class Service {\n"
+            "  run(): number {\n"
+            "    return 1;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "consumer.ts").write_text(
+            "import { Service as RepoService } from './service';\n"
+            "class Consumer {\n"
+            "  work(): number {\n"
+            "    const service: RepoService = new RepoService();\n"
+            "    return service.run();\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "service.ts.Service.run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "consumer.ts.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
 def test_java_cross_file_constructor_and_method_resolution_updates_fanin() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
@@ -422,6 +459,151 @@ def test_java_cross_file_constructor_and_method_resolution_updates_fanin() -> No
 
         service_run = next(row for row in result.method_metrics if row["method_name"] == "Service.java.Service.run")
         consumer_class = next(row for row in result.class_metrics if row["class_name"] == "Consumer.java.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
+def test_java_static_import_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "Helpers.java").write_text(
+            "public class Helpers {\n"
+            "    public static int ping() {\n"
+            "        return 1;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "Consumer.java").write_text(
+            "import static Helpers.ping;\n"
+            "public class Consumer {\n"
+            "    public int work() {\n"
+            "        return ping();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        helper_ping = next(row for row in result.method_metrics if row["method_name"] == "Helpers.java.Helpers.ping")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "Consumer.java.Consumer")
+
+        assert helper_ping["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
+def test_go_cross_file_receiver_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "service.go").write_text(
+            "package sample\n"
+            "type Service struct {}\n"
+            "func (s *Service) Run() int {\n"
+            "    return 1\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "consumer.go").write_text(
+            "package sample\n"
+            "type Consumer struct {}\n"
+            "func (c *Consumer) Work() int {\n"
+            "    svc := &Service{}\n"
+            "    return svc.Run()\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "service.go.Service.Run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "consumer.go.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
+def test_rust_cross_file_receiver_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "service.rs").write_text(
+            "struct Service;\n"
+            "impl Service {\n"
+            "    fn new() -> Self { Self }\n"
+            "    fn run(&self) -> i32 { 1 }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "consumer.rs").write_text(
+            "struct Consumer;\n"
+            "impl Consumer {\n"
+            "    fn work(&self) -> i32 {\n"
+            "        let service = Service::new();\n"
+            "        service.run()\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "service.rs.Service.run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "consumer.rs.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
+def test_csharp_cross_file_receiver_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "Service.cs").write_text(
+            "public class Service {\n"
+            "    public int Run() {\n"
+            "        return 1;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "Consumer.cs").write_text(
+            "public class Consumer {\n"
+            "    public int Work() {\n"
+            "        var service = new Service();\n"
+            "        return service.Run();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "Service.cs.Service.Run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "Consumer.cs.Consumer")
 
         assert service_run["fanin"] == 1
         assert consumer_class["cbo"] == 1
