@@ -12,7 +12,7 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 - Athena queries the processed metrics
 - QuickSight dashboards read the Athena-backed datasets directly
 - each new cloud execution replaces the previous repo snapshot in the dashboard-backed data lake
-- the automated local test suite currently passes with `49` tests
+- the automated local test suite currently passes from the repo root with `.venv/bin/python -m pytest -q`
 
 ## Architecture
 
@@ -77,8 +77,10 @@ Metric semantics and approximations are documented in [metric_contract.md](/User
 Run the full local suite with:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q
 ```
+
+Run that command from the repository root. If you `cd src` first, pytest will not discover the top-level `tests/` directory.
 
 ## Implementation Evidence
 
