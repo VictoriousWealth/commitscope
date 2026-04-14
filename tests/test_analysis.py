@@ -354,6 +354,79 @@ def test_commit_summary_total_loc_uses_file_totals() -> None:
         assert result.commit_summary["total_loc"] == 5
 
 
+def test_javascript_cross_file_constructor_and_method_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "service.js").write_text(
+            "export class Service {\n"
+            "  run() {\n"
+            "    return 1;\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "consumer.js").write_text(
+            "import { Service } from './service';\n"
+            "class Consumer {\n"
+            "  work() {\n"
+            "    const service = new Service();\n"
+            "    return service.run();\n"
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "service.js.Service.run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "consumer.js.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
+def test_java_cross_file_constructor_and_method_resolution_updates_fanin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        (repo_root / "Service.java").write_text(
+            "public class Service {\n"
+            "    public int run() {\n"
+            "        return 1;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (repo_root / "Consumer.java").write_text(
+            "public class Consumer {\n"
+            "    public int work() {\n"
+            "        Service service = new Service();\n"
+            "        return service.run();\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        result = analyze_repository_snapshot(
+            repo_root=repo_root,
+            commit_hash="abc123",
+            repo_name="repo",
+            branch="main",
+            commit_date="2026-03-21",
+        )
+
+        service_run = next(row for row in result.method_metrics if row["method_name"] == "Service.java.Service.run")
+        consumer_class = next(row for row in result.class_metrics if row["class_name"] == "Consumer.java.Consumer")
+
+        assert service_run["fanin"] == 1
+        assert consumer_class["cbo"] == 1
+
+
 def test_typescript_metrics_are_generated_for_simple_class() -> None:
     with tempfile.TemporaryDirectory() as directory:
         repo_root = Path(directory)
