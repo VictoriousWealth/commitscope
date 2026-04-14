@@ -2,6 +2,7 @@ import json
 
 from commitscope.config import load_config
 from commitscope.reporting.quicksight import write_quicksight_assets
+from scripts.provision_quicksight import build_latest_scope_sql
 
 
 def test_write_quicksight_assets_writes_dataset_and_dashboard_files(tmp_path) -> None:
@@ -18,3 +19,13 @@ def test_write_quicksight_assets_writes_dataset_and_dashboard_files(tmp_path) ->
     assert "commitscope_dev_class_metrics" in dashboard_payload["datasets"]
     assert dashboard_payload["sheets"][0]["name"] == "Evolution Overview"
 
+
+def test_build_latest_scope_sql_limits_dataset_to_latest_repo_branch() -> None:
+    sql = build_latest_scope_sql("commitscope_dev", "class_metrics")
+
+    assert "WITH latest_scope AS" in sql
+    assert "FROM commitscope_dev.commit_summary" in sql
+    assert "FROM commitscope_dev.class_metrics AS t" in sql
+    assert "ON t.repo = latest.repo" in sql
+    assert "AND t.branch = latest.branch" in sql
+    assert "LIMIT 1" in sql
