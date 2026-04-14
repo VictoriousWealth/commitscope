@@ -448,6 +448,16 @@ def _compute_lcom(method_access: dict[str, set[str]]) -> float:
     return max((p - q) / (p + q), 0) if (p + q) > 0 else 0.0
 
 
+def _qualified_text_class_candidates(known_class_names: set[str], simple_name: str) -> list[str]:
+    suffix = f".{simple_name}"
+    return sorted(name for name in known_class_names if name.endswith(suffix))
+
+
+def _unique_text_class_name(known_class_names: set[str], simple_name: str) -> str | None:
+    matches = _qualified_text_class_candidates(known_class_names, simple_name)
+    return matches[0] if len(matches) == 1 else None
+
+
 def _rows_from_text_classes(classes: list[TextClass]) -> tuple[list[dict], list[dict]]:
     method_callers: dict[str, set[str]] = defaultdict(set)
     class_fanin_sources: dict[str, set[str]] = defaultdict(set)
@@ -483,6 +493,25 @@ def _rows_from_text_classes(classes: list[TextClass]) -> tuple[list[dict], list[
     method_rows: list[dict] = []
     for text_class in classes:
         lcom_sources = {method.method_name: method.instance_vars for method in text_class.methods}
+        coupled_classes = {
+            ref
+            for method in text_class.methods
+            for ref in method.class_refs
+            if ref != text_class.class_name
+        }
+        for method in text_class.methods:
+            for target in method.direct_calls:
+                candidate = methods_by_full_name.get(target)
+                if candidate is None:
+                    candidate = methods_by_name_and_class.get((text_class.class_name, target))
+                if candidate is None and "." in target:
+                    target_class_name, _, method_simple_name = target.rpartition(".")
+                    candidate = methods_by_name_and_class.get((target_class_name, method_simple_name))
+                if candidate is None:
+                    global_candidates = method_index.get(target, [])
+                    candidate = global_candidates[0] if len(global_candidates) == 1 else None
+                if candidate is not None and candidate.class_name != text_class.class_name:
+                    coupled_classes.add(candidate.class_name)
         class_rows.append(
             {
                 "class_name": text_class.class_name,
@@ -490,7 +519,7 @@ def _rows_from_text_classes(classes: list[TextClass]) -> tuple[list[dict], list[
                 "lcom": _compute_lcom(lcom_sources),
                 "fanin": len(class_fanin_sources.get(text_class.class_name, set())),
                 "fanout": sum(method.fanout for method in text_class.methods),
-                "cbo": len({ref for method in text_class.methods for ref in method.class_refs if ref != text_class.class_name}),
+                "cbo": len(coupled_classes),
                 "rfc": len({method.method_simple_name for method in text_class.methods})
                 + len({call for method in text_class.methods for call in method.direct_calls}),
                 "language": text_class.language,
@@ -606,17 +635,33 @@ class GoAnalyzer:
         lines = [line for line in body_text.splitlines() if line.strip()]
         receiver_name = self._go_receiver_name(method_node.child_by_field_name("receiver"))
         call_nodes = [node for node in _iter_nodes(body_node, "call_expression")]
+        local_var_types = self._go_local_var_types(body_text)
         direct_calls = set()
         for call_node in call_nodes:
             function_node = call_node.child_by_field_name("function")
             if function_node is None:
                 continue
             if function_node.type in {"identifier", "field_identifier"}:
-                direct_calls.add(self._text(function_node))
+                direct_calls.add(f"{qualified_class_name}.{self._text(function_node)}")
             elif function_node.type == "selector_expression":
+                operand = function_node.child_by_field_name("operand")
                 field = function_node.child_by_field_name("field")
                 if field is not None:
-                    direct_calls.add(self._text(field))
+                    field_name = self._text(field)
+                    if operand is not None and operand.type == "identifier":
+                        owner_name = self._text(operand)
+                        if owner_name == receiver_name:
+                            direct_calls.add(f"{qualified_class_name}.{field_name}")
+                            continue
+                        local_type = local_var_types.get(owner_name)
+                        if local_type:
+                            direct_calls.add(f"{local_type}.{field_name}")
+                            continue
+                        owner_class = _unique_text_class_name(self.known_class_names, owner_name)
+                        if owner_class:
+                            direct_calls.add(f"{owner_class}.{field_name}")
+                            continue
+                    direct_calls.add(field_name)
         instance_vars = {
             self._text(field_node)
             for node in _iter_nodes(body_node, "selector_expression")
@@ -626,9 +671,9 @@ class GoAnalyzer:
             and (field_node := node.child_by_field_name("field")) is not None
         }
         class_refs = {
-            f"{self.relative_path}.{self._text(node)}"
+            qualified_name
             for node in _iter_nodes(body_node, "type_identifier")
-            if self._text(node) in self.known_class_names
+            if (qualified_name := _unique_text_class_name(self.known_class_names, self._text(node))) is not None
         }
         cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in {"if_statement", "for_statement", "expression_switch_statement", "type_switch_statement", "select_statement"})
         cc += len(re.findall(r"&&|\|\|", body_text))
@@ -648,6 +693,19 @@ class GoAnalyzer:
             direct_calls=direct_calls,
             class_refs=class_refs,
         )
+
+    def _go_local_var_types(self, body_text: str) -> dict[str, str]:
+        local_var_types: dict[str, str] = {}
+        patterns = [
+            re.compile(r"\b(?P<name>[A-Za-z_]\w*)\s*:=\s*&?(?P<type>[A-Z][A-Za-z0-9_]*)\s*\{"),
+            re.compile(r"\bvar\s+(?P<name>[A-Za-z_]\w*)\s+\*?(?P<type>[A-Z][A-Za-z0-9_]*)\b"),
+        ]
+        for pattern in patterns:
+            for match in pattern.finditer(body_text):
+                qualified_name = _unique_text_class_name(self.known_class_names, match.group("type"))
+                if qualified_name:
+                    local_var_types[match.group("name")] = qualified_name
+        return local_var_types
 
     def _go_receiver_name(self, receiver_node) -> str:
         if receiver_node is None:
@@ -706,17 +764,29 @@ class RustAnalyzer:
         body_text = self._text(body_node)
         lines = [line for line in body_text.splitlines() if line.strip()]
         call_nodes = [node for node in _iter_nodes(body_node, "call_expression")]
+        local_var_types = self._rust_local_var_types(body_text)
         direct_calls = set()
         for call_node in call_nodes:
             function_node = call_node.child_by_field_name("function")
             if function_node is None:
                 continue
             if function_node.type == "identifier":
-                direct_calls.add(self._text(function_node))
+                direct_calls.add(f"{qualified_class_name}.{self._text(function_node)}")
             elif function_node.type == "field_expression":
+                value_node = function_node.child_by_field_name("value")
                 field = function_node.child_by_field_name("field")
                 if field is not None:
-                    direct_calls.add(self._text(field))
+                    field_name = self._text(field)
+                    if value_node is not None and value_node.type == "self":
+                        direct_calls.add(f"{qualified_class_name}.{field_name}")
+                        continue
+                    if value_node is not None and value_node.type == "identifier":
+                        owner_name = self._text(value_node)
+                        local_type = local_var_types.get(owner_name)
+                        if local_type:
+                            direct_calls.add(f"{local_type}.{field_name}")
+                            continue
+                    direct_calls.add(field_name)
         instance_vars = {
             self._text(field_node)
             for node in _iter_nodes(body_node, "field_expression")
@@ -725,9 +795,9 @@ class RustAnalyzer:
             and (field_node := node.child_by_field_name("field")) is not None
         }
         class_refs = {
-            f"{self.relative_path}.{self._text(node)}"
+            qualified_name
             for node in _iter_nodes(body_node, "type_identifier")
-            if self._text(node) in self.known_class_names
+            if (qualified_name := _unique_text_class_name(self.known_class_names, self._text(node))) is not None
         }
         cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in {"if_expression", "for_expression", "while_expression", "loop_expression", "match_expression"})
         cc += len(re.findall(r"&&|\|\|", body_text))
@@ -749,6 +819,19 @@ class RustAnalyzer:
             direct_calls=direct_calls,
             class_refs=class_refs,
         )
+
+    def _rust_local_var_types(self, body_text: str) -> dict[str, str]:
+        local_var_types: dict[str, str] = {}
+        patterns = [
+            re.compile(r"\blet\s+(?:mut\s+)?(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<type>[A-Z][A-Za-z0-9_]*)::"),
+            re.compile(r"\blet\s+(?:mut\s+)?(?P<name>[A-Za-z_]\w*)\s*:\s*&?(?P<type>[A-Z][A-Za-z0-9_]*)\b"),
+        ]
+        for pattern in patterns:
+            for match in pattern.finditer(body_text):
+                qualified_name = _unique_text_class_name(self.known_class_names, match.group("type"))
+                if qualified_name:
+                    local_var_types[match.group("name")] = qualified_name
+        return local_var_types
 
     def _text(self, node) -> str:
         return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
@@ -795,17 +878,33 @@ class CSharpAnalyzer:
         body_text = self._text(body_node)
         lines = [line for line in body_text.splitlines() if line.strip()]
         call_nodes = [node for node in _iter_nodes(body_node, "invocation_expression")]
+        local_var_types = self._csharp_local_var_types(body_text)
         direct_calls = set()
         for call_node in call_nodes:
             function_node = call_node.child_by_field_name("function")
             if function_node is None:
                 continue
             if function_node.type == "identifier":
-                direct_calls.add(self._text(function_node))
+                direct_calls.add(f"{qualified_class_name}.{self._text(function_node)}")
             elif function_node.type == "member_access_expression":
+                expr_node = function_node.child_by_field_name("expression")
                 name = function_node.child_by_field_name("name")
                 if name is not None:
-                    direct_calls.add(self._text(name))
+                    method_name_text = self._text(name)
+                    if expr_node is not None and expr_node.type == "this_expression":
+                        direct_calls.add(f"{qualified_class_name}.{method_name_text}")
+                        continue
+                    if expr_node is not None and expr_node.type == "identifier":
+                        owner_name = self._text(expr_node)
+                        local_type = local_var_types.get(owner_name)
+                        if local_type:
+                            direct_calls.add(f"{local_type}.{method_name_text}")
+                            continue
+                        owner_class = _unique_text_class_name(self.known_class_names, owner_name)
+                        if owner_class:
+                            direct_calls.add(f"{owner_class}.{method_name_text}")
+                            continue
+                    direct_calls.add(method_name_text)
         instance_vars = {
             self._text(name_node)
             for node in _iter_nodes(body_node, "member_access_expression")
@@ -814,9 +913,9 @@ class CSharpAnalyzer:
             and (name_node := node.child_by_field_name("name")) is not None
         }
         class_refs = {
-            f"{self.relative_path}.{self._text(node)}"
+            qualified_name
             for node in _iter_nodes(body_node, "identifier")
-            if self._text(node) in self.known_class_names
+            if (qualified_name := _unique_text_class_name(self.known_class_names, self._text(node))) is not None
         }
         cc = 1 + sum(1 for node in _iter_nodes(body_node) if node.type in {"if_statement", "for_statement", "foreach_statement", "while_statement", "do_statement", "switch_expression", "switch_statement", "catch_clause"})
         cc += len(re.findall(r"&&|\|\|", body_text))
@@ -836,6 +935,19 @@ class CSharpAnalyzer:
             direct_calls=direct_calls,
             class_refs=class_refs,
         )
+
+    def _csharp_local_var_types(self, body_text: str) -> dict[str, str]:
+        local_var_types: dict[str, str] = {}
+        patterns = [
+            re.compile(r"\b(?P<type>[A-Z][A-Za-z0-9_]*)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*new\s+(?P=type)\s*\("),
+            re.compile(r"\bvar\s+(?P<name>[A-Za-z_]\w*)\s*=\s*new\s+(?P<type>[A-Z][A-Za-z0-9_]*)\s*\("),
+        ]
+        for pattern in patterns:
+            for match in pattern.finditer(body_text):
+                qualified_name = _unique_text_class_name(self.known_class_names, match.group("type"))
+                if qualified_name:
+                    local_var_types[match.group("name")] = qualified_name
+        return local_var_types
 
     def _text(self, node) -> str:
         return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
