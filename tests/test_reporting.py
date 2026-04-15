@@ -8,12 +8,15 @@ from commitscope.reporting.reporting import write_reporting_artifacts
 def test_write_runtime_manifest_serializes_outputs(tmp_path) -> None:
     config = load_config("examples/config.dev.json")
     config.reporting.output_root = str(tmp_path)
+    config.runtime.execution_id = "run-20260415T100000Z-abc12345"
+    config.runtime.execution_started_at = "2026-04-15T10:00:00Z"
     (tmp_path / "curated").mkdir(parents=True)
 
     manifest = write_runtime_manifest(config, {"summary": tmp_path / "curated" / "summary.md"})
 
     payload = manifest.read_text(encoding="utf-8")
     assert '"project": "commitscope"' in payload
+    assert '"execution_id": "run-20260415T100000Z-abc12345"' in payload
     assert '"summary"' in payload
 
 
@@ -74,4 +77,3 @@ def test_write_reporting_artifacts_writes_summary_sql_and_ddl(tmp_path, monkeypa
     summary_text = outputs["summary"].read_text(encoding="utf-8")
     assert "Latest Snapshot" in summary_text
     assert "Hotspot Classes" in summary_text
-
