@@ -19,7 +19,7 @@ This is the exact manual-only flow for running CommitScope in the dev AWS enviro
 
 The pipeline writes these output categories to S3.
 
-Important behavior: each new cloud execution clears the previous `raw/`, `processed/`, and `curated/` objects before uploading the new repo snapshot. The QuickSight dashboard is therefore intended to show the latest run by default rather than accumulate multiple repos unless you change the pipeline behavior again.
+Important behavior: each new cloud execution clears the previous `raw/`, `processed/`, and `curated/` objects before uploading the new snapshot. Every output row now carries an explicit `execution_id` and `execution_started_at`, and the QuickSight dashboard is scoped to the latest execution rather than an inferred latest repo or branch.
 
 The pipeline writes these output categories to S3:
 
@@ -33,7 +33,7 @@ The pipeline writes these output categories to S3:
 Examples from a successful run:
 
 - `s3://commitscope-nick-dev/raw/MechanicalSoup/<commit-hash>/raw_metrics.json`
-- `s3://commitscope-nick-dev/processed/commits/repo=MechanicalSoup/branch=main/commit_hash=<hash>/commit_date=<date>/data.parquet`
+- `s3://commitscope-nick-dev/processed/commits/repo=MechanicalSoup/branch=main/execution_id=<execution-id>/commit_hash=<hash>/commit_date=<date>/data.parquet`
 - `s3://commitscope-nick-dev/curated/runtime_manifest.json`
 - `s3://commitscope-nick-dev/curated/summary.md`
 - `s3://commitscope-nick-dev/curated/glue_ddl.sql`
@@ -287,6 +287,7 @@ Current status in this AWS account:
 - dashboard `CommitScope Dev Overview` exists in `eu-west-2`
 - the state machine starts the Glue crawler automatically after the ECS task succeeds
 - the state machine now reruns QuickSight provisioning after the crawler is ready
+- QuickSight datasets are scoped to the latest `execution_id`
 
 Provision or refresh the QuickSight data source, datasets, analysis, and dashboard manually with:
 
@@ -300,7 +301,7 @@ What is automatic now:
 - Step Functions starts the Glue crawler
 - Glue refreshes Athena partitions
 - Step Functions reruns QuickSight provisioning after the crawler is ready
-- QuickSight datasets use direct query, so fresh Athena data is visible without a separate dataset ingestion step
+- QuickSight datasets use direct query and now resolve to the latest `execution_id`, so fresh Athena data is visible without a separate dataset ingestion step
 
 What is still manual:
 
