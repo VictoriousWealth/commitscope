@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from commitscope.analysis.metrics import analyze_repository_snapshot
 from commitscope.config import AppConfig
@@ -15,6 +17,7 @@ from commitscope.utils.fs import ensure_dir
 
 
 def run_pipeline(config: AppConfig) -> dict[str, Path]:
+    execution_id, execution_started_at = _ensure_execution_context(config)
     _reset_output_root(Path(config.output_root))
     if config.storage.write_s3:
         delete_prefixes_from_s3(
@@ -51,7 +54,14 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
                 branch=config.repo.branch,
                 commit_date=commit_date,
             )
+            _annotate_execution_rows(analysis.class_metrics, execution_id, execution_started_at)
+            _annotate_execution_rows(analysis.method_metrics, execution_id, execution_started_at)
+            _annotate_execution_rows(analysis.file_metrics, execution_id, execution_started_at)
+            analysis.commit_summary["execution_id"] = execution_id
+            analysis.commit_summary["execution_started_at"] = execution_started_at
             raw_payload = {
+                "execution_id": execution_id,
+                "execution_started_at": execution_started_at,
                 "commit": asdict(commit),
                 "class_metrics": analysis.class_metrics,
                 "method_metrics": analysis.method_metrics,
@@ -63,6 +73,8 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
                 {
                     "repo": repo_name,
                     "branch": config.repo.branch,
+                    "execution_id": execution_id,
+                    "execution_started_at": execution_started_at,
                     "commit_hash": commit.commit_hash,
                     "commit_date": commit_date,
                     "timestamp": commit.timestamp.isoformat(),
@@ -94,3 +106,18 @@ def _reset_output_root(output_root: Path) -> None:
     if output_root.exists():
         shutil.rmtree(output_root)
     ensure_dir(output_root)
+
+
+def _ensure_execution_context(config: AppConfig) -> tuple[str, str]:
+    if config.runtime.execution_started_at is None:
+        config.runtime.execution_started_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    if config.runtime.execution_id is None:
+        timestamp = config.runtime.execution_started_at.replace(":", "").replace("-", "").replace(".", "")
+        config.runtime.execution_id = f"run-{timestamp}-{uuid4().hex[:8]}"
+    return config.runtime.execution_id, config.runtime.execution_started_at
+
+
+def _annotate_execution_rows(rows: list[dict], execution_id: str, execution_started_at: str) -> None:
+    for row in rows:
+        row["execution_id"] = execution_id
+        row["execution_started_at"] = execution_started_at
