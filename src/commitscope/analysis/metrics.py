@@ -1598,10 +1598,22 @@ def _basic_file_metrics(path: Path, relative: str, language: str, repo_name: str
     }
 
 
-def _annotate_rows(rows: list[dict], repo_name: str, branch: str, commit_hash: str, commit_date: str) -> list[dict]:
+def _annotate_rows(
+    rows: list[dict],
+    repo_name: str,
+    branch: str,
+    commit_hash: str,
+    commit_date: str,
+    execution_id: str | None = None,
+    execution_started_at: str | None = None,
+) -> list[dict]:
     for row in rows:
         row["repo"] = repo_name
         row["branch"] = branch
+        if execution_id is not None:
+            row["execution_id"] = execution_id
+        if execution_started_at is not None:
+            row["execution_started_at"] = execution_started_at
         row["commit_hash"] = commit_hash
         row["commit_date"] = commit_date
     return rows
