@@ -47,6 +47,8 @@ class RuntimeConfig:
     container_image: str = "commitscope:dev"
     container_command: list[str] | None = None
     state_machine_arn: str | None = None
+    execution_id: str | None = None
+    execution_started_at: str | None = None
 
 
 @dataclass(slots=True)
