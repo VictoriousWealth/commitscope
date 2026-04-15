@@ -25,7 +25,7 @@ def test_build_latest_scope_sql_limits_dataset_to_latest_repo_branch() -> None:
 
     assert "WITH latest_scope AS" in sql
     assert "FROM commitscope_dev.commit_summary" in sql
+    assert "SELECT execution_id" in sql
     assert "FROM commitscope_dev.class_metrics AS t" in sql
-    assert "ON t.repo = latest.repo" in sql
-    assert "AND t.branch = latest.branch" in sql
+    assert "ON t.execution_id = latest.execution_id" in sql
     assert "LIMIT 1" in sql
