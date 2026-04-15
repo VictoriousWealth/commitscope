@@ -11,5 +11,6 @@ def test_build_glue_ddl_contains_database_tables_and_locations() -> None:
     assert "CREATE EXTERNAL TABLE IF NOT EXISTS commitscope_dev.commits" in ddl
     assert "CREATE EXTERNAL TABLE IF NOT EXISTS commitscope_dev.class_metrics" in ddl
     assert "LOCATION 's3://commitscope-nick-dev/processed/commits/'" in ddl
+    assert "execution_started_at string" in ddl
+    assert "execution_id string" in ddl
     assert "MSCK REPAIR TABLE commitscope_dev.commit_summary;" in ddl
-
