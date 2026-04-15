@@ -59,7 +59,7 @@ Wait for `deploy-dev.yml` to finish successfully before starting an execution.
 Use this payload unless you intentionally want to change the target repo. If you prefer to generate it from the example config instead of copy-pasting JSON, run:
 
 ```bash
-.venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
+PYTHONPATH=src .venv/bin/python -m commitscope.main dispatch --config examples/config.dev.json > stepfunctions-input.json
 ```
 
 The payload should look like this:
