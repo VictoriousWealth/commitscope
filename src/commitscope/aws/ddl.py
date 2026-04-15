@@ -15,6 +15,7 @@ CORE_TABLES = [
     TableSpec(
         name="commits",
         columns=[
+            ("execution_started_at", "string"),
             ("timestamp", "string"),
             ("author", "string"),
             ("author_email", "string"),
@@ -27,6 +28,7 @@ CORE_TABLES = [
     TableSpec(
         name="class_metrics",
         columns=[
+            ("execution_started_at", "string"),
             ("class_name", "string"),
             ("wmc", "int"),
             ("lcom", "double"),
@@ -40,6 +42,7 @@ CORE_TABLES = [
     TableSpec(
         name="method_metrics",
         columns=[
+            ("execution_started_at", "string"),
             ("class_name", "string"),
             ("method_name", "string"),
             ("cc", "int"),
@@ -54,6 +57,7 @@ CORE_TABLES = [
     TableSpec(
         name="file_metrics",
         columns=[
+            ("execution_started_at", "string"),
             ("file_path", "string"),
             ("language", "string"),
             ("loc", "int"),
@@ -65,6 +69,7 @@ CORE_TABLES = [
     TableSpec(
         name="commit_summary",
         columns=[
+            ("execution_started_at", "string"),
             ("total_classes", "int"),
             ("total_methods", "int"),
             ("avg_wmc", "double"),
@@ -95,6 +100,7 @@ def build_glue_ddl(config: AppConfig) -> str:
 PARTITIONED BY (
   repo string,
   branch string,
+  execution_id string,
   commit_hash string,
   commit_date string
 )
