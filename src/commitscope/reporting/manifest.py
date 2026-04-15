@@ -10,6 +10,8 @@ def write_runtime_manifest(config: AppConfig, outputs: dict[str, Path]) -> Path:
     manifest_path = Path(config.output_root) / "curated" / "runtime_manifest.json"
     payload = {
         "execution_mode": config.runtime.execution_mode,
+        "execution_id": config.runtime.execution_id,
+        "execution_started_at": config.runtime.execution_started_at,
         "project": config.project,
         "environment": config.environment,
         "aws_region": config.aws_region,
