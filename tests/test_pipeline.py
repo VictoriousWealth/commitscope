@@ -129,6 +129,8 @@ def test_run_pipeline_uploads_after_manifest_and_restores_branch(tmp_path, monke
     outputs = run_pipeline(config)
 
     assert outputs["runtime_manifest"].name == "runtime_manifest.json"
+    assert config.runtime.execution_id is not None
+    assert config.runtime.execution_started_at is not None
     assert not stale_file.exists()
     assert calls[0] == "clear-s3"
     assert "upload" in calls
