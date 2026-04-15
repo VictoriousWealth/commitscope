@@ -286,8 +286,9 @@ Current status in this AWS account:
 - analysis `CommitScope Dev Overview` exists in `eu-west-2`
 - dashboard `CommitScope Dev Overview` exists in `eu-west-2`
 - the state machine starts the Glue crawler automatically after the ECS task succeeds
+- the state machine now reruns QuickSight provisioning after the crawler is ready
 
-Provision or refresh the QuickSight data source, datasets, analysis, and dashboard with:
+Provision or refresh the QuickSight data source, datasets, analysis, and dashboard manually with:
 
 ```bash
 .venv/bin/python scripts/provision_quicksight.py
@@ -298,6 +299,7 @@ What is automatic now:
 - Step Functions runs the analysis container
 - Step Functions starts the Glue crawler
 - Glue refreshes Athena partitions
+- Step Functions reruns QuickSight provisioning after the crawler is ready
 - QuickSight datasets use direct query, so fresh Athena data is visible without a separate dataset ingestion step
 
 What is still manual:
