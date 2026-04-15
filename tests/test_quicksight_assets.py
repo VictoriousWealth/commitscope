@@ -2,7 +2,7 @@ import json
 
 from commitscope.config import load_config
 from commitscope.reporting.quicksight import write_quicksight_assets
-from scripts.provision_quicksight import build_latest_scope_sql
+from scripts.provision_quicksight import build_latest_scope_sql, wait_for_dashboard_version
 
 
 def test_write_quicksight_assets_writes_dataset_and_dashboard_files(tmp_path) -> None:
@@ -29,3 +29,30 @@ def test_build_latest_scope_sql_limits_dataset_to_latest_repo_branch() -> None:
     assert "FROM commitscope_dev.class_metrics AS t" in sql
     assert "ON t.execution_id = latest.execution_id" in sql
     assert "LIMIT 1" in sql
+
+
+def test_wait_for_dashboard_version_waits_until_latest_version_is_publishable(monkeypatch) -> None:
+    class FakeQuickSight:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list_dashboard_versions(self, **_kwargs):
+            self.calls += 1
+            status = "CREATION_IN_PROGRESS" if self.calls == 1 else "CREATION_SUCCESSFUL"
+            return {
+                "DashboardVersionSummaryList": [
+                    {"VersionNumber": 1, "Status": "UPDATE_SUCCESSFUL"},
+                    {"VersionNumber": 2, "Status": status},
+                ]
+            }
+
+    monkeypatch.setattr("scripts.provision_quicksight.time.sleep", lambda _seconds: None)
+
+    version = wait_for_dashboard_version(
+        qs=FakeQuickSight(),
+        aws_account_id="123456789012",
+        dashboard_id="dashboard",
+        timeout_seconds=30,
+    )
+
+    assert version == 2
