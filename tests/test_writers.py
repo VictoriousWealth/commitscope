@@ -25,6 +25,8 @@ def test_write_processed_outputs_writes_partitioned_parquet_and_flat_files(tmp_p
             {
                 "repo": "repo",
                 "branch": "main",
+                "execution_id": "run-20260322T000000Z-abc12345",
+                "execution_started_at": "2026-03-22T00:00:00Z",
                 "commit_hash": "abc123",
                 "commit_date": "2026-03-22",
                 "timestamp": "2026-03-22T00:00:00",
@@ -51,8 +53,8 @@ def test_write_processed_outputs_writes_partitioned_parquet_and_flat_files(tmp_p
         commits_root
         / "repo=repo"
         / "branch=main"
+        / "execution_id=run-20260322T000000Z-abc12345"
         / "commit_hash=abc123"
         / "commit_date=2026-03-22"
         / "data.parquet"
     ).exists()
-
