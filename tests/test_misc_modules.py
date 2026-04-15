@@ -31,8 +31,14 @@ def test_build_stepfunctions_input_serializes_config() -> None:
     payload = build_stepfunctions_input(config)
 
     assert payload["execution_mode"] == "stepfunctions"
+    assert payload["project"] == config.project
+    assert payload["environment"] == config.environment
     assert payload["repo_url"] == config.repo.url
-    assert json.loads(payload["config_json"]) == asdict(config)
+    config_json = json.loads(payload["config_json"])
+    expected = asdict(config)
+    expected["runtime"]["execution_mode"] = "stepfunctions"
+    expected["storage"]["write_s3"] = True
+    assert config_json == expected
 
 
 def test_container_main_prints_pipeline_outputs(monkeypatch, capsys) -> None:
