@@ -37,6 +37,9 @@ def test_build_stepfunctions_input_serializes_config() -> None:
     config_json = json.loads(payload["config_json"])
     expected = asdict(config)
     expected["runtime"]["execution_mode"] = "stepfunctions"
+    expected["storage"]["write_local_json"] = False
+    expected["storage"]["write_local_csv"] = False
+    expected["storage"]["write_local_parquet"] = True
     expected["storage"]["write_s3"] = True
     assert config_json == expected
 
