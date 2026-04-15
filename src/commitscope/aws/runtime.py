@@ -11,6 +11,9 @@ from commitscope.config import AppConfig, load_config
 def build_stepfunctions_input(config: AppConfig) -> dict:
     cloud_config = deepcopy(config)
     cloud_config.runtime.execution_mode = "stepfunctions"
+    cloud_config.storage.write_local_json = False
+    cloud_config.storage.write_local_csv = False
+    cloud_config.storage.write_local_parquet = True
     cloud_config.storage.write_s3 = True
     config_json = json.dumps(asdict(cloud_config))
     return {
