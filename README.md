@@ -11,7 +11,9 @@ CommitScope turns Git history into queryable code-health datasets and dashboards
 - Glue catalogs the generated datasets
 - Athena queries the processed metrics
 - QuickSight dashboards read the Athena-backed datasets directly
-- each new cloud execution replaces the previous repo snapshot in the dashboard-backed data lake
+- each cloud execution now carries an explicit `execution_id`
+- QuickSight dashboards are scoped to the latest execution rather than an inferred latest repo snapshot
+- Step Functions reruns QuickSight provisioning automatically after the Glue crawler is ready
 - the automated local test suite currently passes from the repo root with `.venv/bin/python -m pytest -q`
 
 ## Architecture
