@@ -98,9 +98,11 @@ The cloud path is:
    - `raw/`
    - `processed/`
    - `curated/`
-5. the state machine starts the Glue crawler so partitions refresh after a successful run and deleted partitions are removed from Glue
-6. Athena queries the Parquet written under `processed/`
-7. QuickSight uses Athena-backed direct-query datasets and dashboards provisioned from the repo helper
+5. every output row is tagged with an explicit `execution_id` and `execution_started_at`
+6. the state machine starts the Glue crawler so partitions refresh after a successful run and deleted partitions are removed from Glue
+7. after the crawler reaches `READY`, the state machine reruns `scripts/provision_quicksight.py`
+8. Athena queries the Parquet written under `processed/`
+9. QuickSight uses Athena-backed direct-query datasets and dashboards scoped to the latest execution
 
 ## 6. Start A Cloud Run
 
@@ -164,7 +166,7 @@ aws athena start-query-execution \
   --result-configuration OutputLocation="s3://$(terraform -chdir=infrastructure/terraform/envs/dev output -raw data_lake_bucket)/curated/athena-results/"
 ```
 
-Confirm QuickSight assets are provisioned and can query Athena:
+Confirm QuickSight assets are provisioned and can query Athena. This reprovision now also runs automatically inside the state machine after the crawler completes, so this command is mainly for manual recovery or one-off refreshes:
 
 ```bash
 .venv/bin/python scripts/provision_quicksight.py
@@ -182,4 +184,4 @@ Then verify in the QuickSight UI that:
 - apply the generated DDL from [glue_ddl.sql](/Users/efeon/commitscope/outputs/generated/curated/glue_ddl.sql) if the crawler has not yet registered the tables as expected
 - Lambda is intentionally a prepare step only
 - ECS Fargate is the heavy-analysis runtime
-- QuickSight provisioning is scripted; the generated curated JSON remains useful as an evidence artifact and as a reference asset definition
+- QuickSight provisioning is scripted and now reruns automatically from Step Functions; the generated curated JSON remains useful as an evidence artifact and as a reference asset definition
