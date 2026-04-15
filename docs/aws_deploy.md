@@ -98,11 +98,12 @@ The cloud path is:
    - `raw/`
    - `processed/`
    - `curated/`
-5. every output row is tagged with an explicit `execution_id` and `execution_started_at`
-6. the state machine starts the Glue crawler so partitions refresh after a successful run and deleted partitions are removed from Glue
-7. after the crawler reaches `READY`, the state machine reruns `scripts/provision_quicksight.py`
-8. Athena queries the Parquet written under `processed/`
-9. QuickSight uses Athena-backed direct-query datasets and dashboards scoped to the latest execution
+5. Step Functions dispatch forces cloud output to S3-backed Parquet only, so flat local CSV/JSON files are not uploaded under `processed/`
+6. every output row is tagged with an explicit `execution_id` and `execution_started_at`
+7. the state machine starts the Glue crawler so partitions refresh after a successful run and deleted partitions are removed from Glue
+8. after the crawler reaches `READY`, the state machine reruns `scripts/provision_quicksight.py`
+9. Athena queries the Parquet written under the five `processed/<table>/` roots
+10. QuickSight uses Athena-backed direct-query datasets and dashboards scoped to the latest execution
 
 ## 6. Start A Cloud Run
 
@@ -155,6 +156,17 @@ Confirm Parquet landed in S3:
 aws s3 ls "s3://$(terraform -chdir=infrastructure/terraform/envs/dev output -raw data_lake_bucket)/processed/" \
   --recursive | grep '\.parquet$'
 ```
+
+Confirm Glue discovered the expected table names:
+
+```bash
+aws glue get-tables \
+  --region eu-west-2 \
+  --database-name commitscope_dev \
+  --query 'TableList[].Name'
+```
+
+Expected tables are `commits`, `class_metrics`, `method_metrics`, `file_metrics`, and `commit_summary`. Tables such as `commit_summary_csv` or `repo_<name>` mean stale flat files or an overly broad crawler target are being cataloged instead of the Parquet table roots.
 
 Confirm Athena tables are queryable:
 
