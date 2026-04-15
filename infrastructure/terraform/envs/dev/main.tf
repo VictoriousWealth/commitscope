@@ -418,6 +418,77 @@ resource "aws_iam_role_policy" "ecs_task_data_lake" {
   })
 }
 
+resource "aws_iam_role_policy" "ecs_task_quicksight" {
+  count = local.effective_container_image_uri != null ? 1 : 0
+  name  = "${local.name_prefix}-ecs-task-quicksight"
+  role  = aws_iam_role.ecs_task_role[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "quicksight:ListUsers",
+          "quicksight:DescribeDataSource",
+          "quicksight:DescribeDataSourcePermissions",
+          "quicksight:PassDataSource",
+          "quicksight:UpdateDataSource",
+          "quicksight:CreateDataSource",
+          "quicksight:DeleteDataSource",
+          "quicksight:UpdateDataSourcePermissions",
+          "quicksight:DescribeDataSet",
+          "quicksight:DescribeDataSetPermissions",
+          "quicksight:PassDataSet",
+          "quicksight:DescribeIngestion",
+          "quicksight:ListIngestions",
+          "quicksight:UpdateDataSet",
+          "quicksight:CreateDataSet",
+          "quicksight:DeleteDataSet",
+          "quicksight:CreateIngestion",
+          "quicksight:CancelIngestion",
+          "quicksight:UpdateDataSetPermissions",
+          "quicksight:RestoreAnalysis",
+          "quicksight:UpdateAnalysisPermissions",
+          "quicksight:DeleteAnalysis",
+          "quicksight:DescribeAnalysisPermissions",
+          "quicksight:QueryAnalysis",
+          "quicksight:DescribeAnalysis",
+          "quicksight:UpdateAnalysis",
+          "quicksight:CreateAnalysis",
+          "quicksight:DescribeDashboard",
+          "quicksight:ListDashboardVersions",
+          "quicksight:UpdateDashboardPermissions",
+          "quicksight:QueryDashboard",
+          "quicksight:UpdateDashboard",
+          "quicksight:CreateDashboard",
+          "quicksight:DeleteDashboard",
+          "quicksight:DescribeDashboardPermissions",
+          "quicksight:UpdateDashboardPublishedVersion"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:BatchGetPartition"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = [aws_iam_role.quicksight_athena_role.arn]
+      }
+    ]
+  })
+}
+
 resource "aws_ecs_cluster" "analysis" {
   count = local.effective_container_image_uri != null ? 1 : 0
   name  = "${local.name_prefix}-cluster"
@@ -568,10 +639,35 @@ resource "aws_sfn_state_machine" "pipeline" {
           {
             Variable     = "$.crawler.Crawler.State"
             StringEquals = "READY"
-            Next         = "Complete"
+            Next         = "ProvisionQuickSight"
           }
         ]
         Default = "WaitForCrawler"
+      }
+      ProvisionQuickSight = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::ecs:runTask.sync"
+        Parameters = {
+          LaunchType     = "FARGATE"
+          Cluster        = aws_ecs_cluster.analysis[0].arn
+          TaskDefinition = aws_ecs_task_definition.analysis[0].arn
+          NetworkConfiguration = {
+            AwsvpcConfiguration = {
+              AssignPublicIp = "ENABLED"
+              Subnets        = var.subnet_ids
+              SecurityGroups = var.security_group_ids
+            }
+          }
+          Overrides = {
+            ContainerOverrides = [
+              {
+                Name    = "commitscope"
+                Command = ["python", "scripts/provision_quicksight.py", "--database", var.athena_database, "--workgroup", aws_athena_workgroup.commitscope.name]
+              }
+            ]
+          }
+        }
+        Next = "Complete"
       }
       Complete = {
         Type = "Succeed"
