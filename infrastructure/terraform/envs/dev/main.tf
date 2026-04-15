@@ -283,9 +283,32 @@ resource "aws_glue_crawler" "processed" {
   name          = "${local.name_prefix}-crawler"
   database_name = aws_glue_catalog_database.commitscope.name
   role          = aws_iam_role.glue_role.arn
+
   s3_target {
-    path = "s3://${aws_s3_bucket.data_lake.bucket}/processed/"
+    path       = "s3://${aws_s3_bucket.data_lake.bucket}/processed/commits/"
+    exclusions = ["*.csv", "*.json", "**/*.csv", "**/*.json"]
   }
+
+  s3_target {
+    path       = "s3://${aws_s3_bucket.data_lake.bucket}/processed/class_metrics/"
+    exclusions = ["*.csv", "*.json", "**/*.csv", "**/*.json"]
+  }
+
+  s3_target {
+    path       = "s3://${aws_s3_bucket.data_lake.bucket}/processed/method_metrics/"
+    exclusions = ["*.csv", "*.json", "**/*.csv", "**/*.json"]
+  }
+
+  s3_target {
+    path       = "s3://${aws_s3_bucket.data_lake.bucket}/processed/file_metrics/"
+    exclusions = ["*.csv", "*.json", "**/*.csv", "**/*.json"]
+  }
+
+  s3_target {
+    path       = "s3://${aws_s3_bucket.data_lake.bucket}/processed/commit_summary/"
+    exclusions = ["*.csv", "*.json", "**/*.csv", "**/*.json"]
+  }
+
   schema_change_policy {
     delete_behavior = "DELETE_FROM_DATABASE"
     update_behavior = "UPDATE_IN_DATABASE"
