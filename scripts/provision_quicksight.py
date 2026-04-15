@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -345,12 +346,10 @@ def ensure_dashboard(
             Definition=definition,
             ValidationStrategy={"Mode": "LENIENT"},
         )
-        latest_version = max(
-            version["VersionNumber"]
-            for version in qs.list_dashboard_versions(
-                AwsAccountId=aws_account_id,
-                DashboardId=dashboard_id,
-            )["DashboardVersionSummaryList"]
+        latest_version = wait_for_dashboard_version(
+            qs=qs,
+            aws_account_id=aws_account_id,
+            dashboard_id=dashboard_id,
         )
         qs.update_dashboard_published_version(
             AwsAccountId=aws_account_id,
@@ -368,6 +367,24 @@ def ensure_dashboard(
             ValidationStrategy={"Mode": "LENIENT"},
         )
         return response["Arn"]
+
+
+def wait_for_dashboard_version(*, qs, aws_account_id: str, dashboard_id: str, timeout_seconds: int = 180) -> int:
+    deadline = time.monotonic() + timeout_seconds
+    last_status = "UNKNOWN"
+    while time.monotonic() < deadline:
+        versions = qs.list_dashboard_versions(
+            AwsAccountId=aws_account_id,
+            DashboardId=dashboard_id,
+        )["DashboardVersionSummaryList"]
+        latest = max(versions, key=lambda version: version["VersionNumber"])
+        last_status = latest.get("Status", "UNKNOWN")
+        if last_status in {"CREATION_SUCCESSFUL", "UPDATE_SUCCESSFUL"}:
+            return latest["VersionNumber"]
+        if last_status in {"CREATION_FAILED", "UPDATE_FAILED"}:
+            raise RuntimeError(f"Dashboard version {latest['VersionNumber']} failed with status {last_status}")
+        time.sleep(5)
+    raise TimeoutError(f"Dashboard {dashboard_id} did not become publishable within {timeout_seconds}s; last status={last_status}")
 
 
 def build_asset_definition(dataset_arns: dict[str, str]) -> dict[str, Any]:
