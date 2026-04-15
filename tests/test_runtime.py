@@ -11,4 +11,7 @@ def test_dispatch_payload_contains_config_json() -> None:
     assert payload["branch"] == "main"
     config_json = json.loads(payload["config_json"])
     assert config_json["runtime"]["execution_mode"] == "stepfunctions"
+    assert config_json["storage"]["write_local_json"] is False
+    assert config_json["storage"]["write_local_csv"] is False
+    assert config_json["storage"]["write_local_parquet"] is True
     assert config_json["storage"]["write_s3"] is True
