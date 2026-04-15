@@ -118,6 +118,17 @@ If you want a faster smoke test, reduce:
 "max_commits": 3
 ```
 
+The generated Step Functions payload forces cloud output to S3-backed Parquet only:
+
+```json
+"write_local_json": false,
+"write_local_csv": false,
+"write_local_parquet": true,
+"write_s3": true
+```
+
+That keeps Glue focused on the partitioned Parquet table roots under `processed/`.
+
 ## 3. Start An Execution
 
 Save the payload as `stepfunctions-input.json`, then run:
@@ -230,6 +241,18 @@ aws glue get-tables \
   --query 'TableList[].Name' \
   --output table
 ```
+
+The expected tables are:
+
+```text
+commits
+class_metrics
+method_metrics
+file_metrics
+commit_summary
+```
+
+If Glue shows tables such as `commit_summary_csv`, `commits_json`, or `repo_<name>`, it is cataloging stale flat files or an overly broad crawler target. Delete stale `processed/` objects, redeploy the crawler change, rerun Step Functions, then let the crawler complete before provisioning QuickSight.
 
 List partitions for the `commits` table:
 
