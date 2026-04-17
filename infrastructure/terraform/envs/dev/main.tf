@@ -615,8 +615,9 @@ resource "aws_sfn_state_machine" "pipeline" {
         Next       = local.effective_container_image_uri != null ? "RunAnalysisContainer" : "Complete"
       }
       RunAnalysisContainer = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::ecs:runTask.sync"
+        Type           = "Task"
+        Resource       = "arn:aws:states:::ecs:runTask.sync"
+        TimeoutSeconds = var.analysis_task_timeout_seconds
         Parameters = {
           LaunchType     = "FARGATE"
           Cluster        = aws_ecs_cluster.analysis[0].arn
