@@ -52,3 +52,9 @@ variable "sample_config_path" {
   type    = string
   default = "examples/config.dev.json"
 }
+
+variable "analysis_task_timeout_seconds" {
+  description = "Maximum wall-clock time Step Functions waits for the ECS analysis task before timing out the execution."
+  type        = number
+  default     = 3600
+}
