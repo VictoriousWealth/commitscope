@@ -192,6 +192,16 @@ aws logs tail /ecs/commitscope-dev \
   --since 30m
 ```
 
+Analysis runs emit JSON progress lines:
+
+```json
+{"event": "pipeline_commits_selected", "...": "..."}
+{"event": "commit_analysis_started", "...": "..."}
+{"event": "commit_analysis_completed", "...": "..."}
+```
+
+If an execution times out or appears stuck, the latest `commit_analysis_started` without a matching `commit_analysis_completed` identifies the commit being analysed. The Step Functions `RunAnalysisContainer` state has an analysis timeout configured in Terraform as `analysis_task_timeout_seconds`, default `3600`.
+
 ## 6. Verify S3 Outputs
 
 Check the newest objects:
