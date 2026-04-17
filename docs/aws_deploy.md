@@ -93,7 +93,7 @@ The cloud path is:
 
 1. Step Functions execution starts with the config payload from `commitscope.main dispatch`
 2. Lambda prepare step receives `config_json` and turns it into ECS container overrides
-3. ECS Fargate task runs `python -m commitscope.aws.container`
+3. ECS Fargate task runs `python -m commitscope.aws.container`; Step Functions times out this analysis task after the configured `analysis_task_timeout_seconds` value, default `3600`
 4. the pipeline clears the previous `raw/`, `processed/`, and `curated/` objects, then clones the target public GitHub repo, analyses the configured commit range, and writes:
    - `raw/`
    - `processed/`
@@ -148,6 +148,15 @@ aws ecs list-tasks \
   --region eu-west-2 \
   --cluster "$(terraform -chdir=infrastructure/terraform/envs/dev output -raw ecs_cluster_arn)" \
   --desired-status STOPPED
+```
+
+The ECS logs include one JSON progress line when commits are selected and one start/complete pair per analysed commit. Use these lines to identify the last commit reached by a slow or timed-out run:
+
+```bash
+aws logs tail /ecs/commitscope-dev \
+  --region eu-west-2 \
+  --since 2h \
+  --format short
 ```
 
 Confirm Parquet landed in S3:
