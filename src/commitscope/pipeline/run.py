@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 from commitscope.analysis.metrics import analyze_repository_snapshot
@@ -33,6 +35,14 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
     repo_path = clone_or_update_repository(config.repo)
     commits = select_commits(repo_path, config.repo)
     repo_name = repo_name_from_url(config.repo.url)
+    total_commits = len(commits)
+    _log_progress(
+        "pipeline_commits_selected",
+        execution_id=execution_id,
+        repo=repo_name,
+        branch=config.repo.branch,
+        total_commits=total_commits,
+    )
 
     raw_root = ensure_dir(config.output_root / "raw" / repo_name)
     tables: dict[str, list[dict]] = {
@@ -44,7 +54,19 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
     }
 
     try:
-        for commit in commits:
+        for index, commit in enumerate(commits, start=1):
+            commit_started = perf_counter()
+            _log_progress(
+                "commit_analysis_started",
+                execution_id=execution_id,
+                repo=repo_name,
+                branch=config.repo.branch,
+                commit_index=index,
+                total_commits=total_commits,
+                commit_hash=commit.commit_hash,
+                commit_date=commit.timestamp.date().isoformat(),
+                files_changed=commit.files_changed,
+            )
             checkout_commit(repo_path, commit.commit_hash)
             commit_date = commit.timestamp.date().isoformat()
             analysis = analyze_repository_snapshot(
@@ -90,6 +112,19 @@ def run_pipeline(config: AppConfig) -> dict[str, Path]:
             tables["method_metrics"].extend(analysis.method_metrics)
             tables["file_metrics"].extend(analysis.file_metrics)
             tables["commit_summary"].append(analysis.commit_summary)
+            _log_progress(
+                "commit_analysis_completed",
+                execution_id=execution_id,
+                repo=repo_name,
+                branch=config.repo.branch,
+                commit_index=index,
+                total_commits=total_commits,
+                commit_hash=commit.commit_hash,
+                duration_seconds=round(perf_counter() - commit_started, 3),
+                class_rows=len(analysis.class_metrics),
+                method_rows=len(analysis.method_metrics),
+                file_rows=len(analysis.file_metrics),
+            )
     finally:
         restore_branch(repo_path, config.repo.branch)
 
@@ -121,3 +156,7 @@ def _annotate_execution_rows(rows: list[dict], execution_id: str, execution_star
     for row in rows:
         row["execution_id"] = execution_id
         row["execution_started_at"] = execution_started_at
+
+
+def _log_progress(event: str, **fields: object) -> None:
+    print(json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
