@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -73,7 +74,7 @@ class DummyAnalysis:
         }
 
 
-def test_run_pipeline_uploads_after_manifest_and_restores_branch(tmp_path, monkeypatch) -> None:
+def test_run_pipeline_uploads_after_manifest_and_restores_branch(tmp_path, monkeypatch, capsys) -> None:
     config = load_config("examples/config.dev.json")
     config.reporting.output_root = str(tmp_path / "outputs")
     config.storage.write_s3 = True
@@ -136,3 +137,12 @@ def test_run_pipeline_uploads_after_manifest_and_restores_branch(tmp_path, monke
     assert "upload" in calls
     assert calls[-1] == "upload"
     assert "restore:main" in calls
+    progress_events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in progress_events] == [
+        "pipeline_commits_selected",
+        "commit_analysis_started",
+        "commit_analysis_completed",
+    ]
+    assert progress_events[1]["commit_index"] == 1
+    assert progress_events[1]["total_commits"] == 1
+    assert progress_events[2]["file_rows"] == 1
