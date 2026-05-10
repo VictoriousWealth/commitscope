@@ -2,6 +2,15 @@
 
 CommitScope turns Git history into queryable code-health datasets and dashboards. It deploys an AWS pipeline with Terraform, runs analysis in ECS via Step Functions, stores raw and processed outputs in S3, catalogs them with Glue, queries them with Athena, and visualizes them in QuickSight.
 
+## Case Study
+
+CommitScope is my strongest cloud/platform project. I built it to show how repository analysis can move through a real AWS data pipeline instead of staying as a local script.
+
+- Problem: turn Git history and code-health metrics into queryable, dashboard-ready data.
+- Build: GitHub Actions and Terraform deploy the AWS environment; Step Functions orchestrates the workflow; ECS Fargate runs repository analysis; S3 stores raw, processed and curated outputs; Glue catalogs datasets; Athena queries them; QuickSight visualizes the results.
+- Evidence: the repo includes screenshots for deployment, Step Functions execution, ECS success, S3 outputs, Glue crawler runs, Athena query results and QuickSight dashboards.
+- Main lesson: a useful cloud project needs orchestration, traceable data flow, reproducible outputs and a dashboard story, not just AWS service names.
+
 ## What Works
 
 - GitHub Actions deploys the dev environment in AWS
