@@ -61,7 +61,7 @@ The pipeline computes and exposes:
 - `LLOC`
 - commit-level repository summaries
 
-Metric semantics and approximations are documented in [metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md).
+Metric semantics and approximations are documented in [metric_contract.md](docs/metric_contract.md).
 
 ## Language Support
 
@@ -86,14 +86,14 @@ Run that command from the repository root. If you `cd src` first, pytest will no
 
 ## Implementation Evidence
 
-- Terraform orchestration: [main.tf](/Users/efeon/commitscope/infrastructure/terraform/envs/dev/main.tf)
-- QuickSight provisioning automation: [provision_quicksight.py](/Users/efeon/commitscope/scripts/provision_quicksight.py)
-- Manual operating procedure: [manual_execution.md](/Users/efeon/commitscope/docs/manual_execution.md)
-- Container run notes: [container_run.md](/Users/efeon/commitscope/docs/container_run.md)
+- Terraform orchestration: [main.tf](infrastructure/terraform/envs/dev/main.tf)
+- QuickSight provisioning automation: [provision_quicksight.py](scripts/provision_quicksight.py)
+- Manual operating procedure: [manual_execution.md](docs/manual_execution.md)
+- Container run notes: [container_run.md](docs/container_run.md)
 
 ## Docs
 
-- manual execution: [manual_execution.md](/Users/efeon/commitscope/docs/manual_execution.md)
-- AWS deployment: [aws_deploy.md](/Users/efeon/commitscope/docs/aws_deploy.md)
-- metric contract: [metric_contract.md](/Users/efeon/commitscope/docs/metric_contract.md)
-- original project/product write-up: [PRD.md](/Users/efeon/commitscope/PRD.md)
+- manual execution: [manual_execution.md](docs/manual_execution.md)
+- AWS deployment: [aws_deploy.md](docs/aws_deploy.md)
+- metric contract: [metric_contract.md](docs/metric_contract.md)
+- original project/product write-up: [PRD.md](PRD.md)
